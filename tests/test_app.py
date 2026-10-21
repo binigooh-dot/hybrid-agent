@@ -139,6 +139,19 @@ class ControlApiTests(unittest.TestCase):
         srv.shutdown()
 
 
+class LocalServerTests(unittest.TestCase):
+    def test_starts_without_a_dns_lookup(self):
+        """HTTPServer calls socket.getfqdn() on start; that stalled for many seconds on GitHub's macOS runners."""
+        from http.server import BaseHTTPRequestHandler
+
+        from hybrid_agent.core.localserver import LocalServer
+        with mock.patch("socket.getfqdn", side_effect=AssertionError("DNS lookup on start")):
+            srv = LocalServer(("127.0.0.1", 0), BaseHTTPRequestHandler)
+        self.addCleanup(srv.server_close)
+        self.assertEqual(srv.server_name, "127.0.0.1")
+        self.assertGreater(srv.server_port, 0)
+
+
 class LauncherTests(unittest.TestCase):
     def test_already_running_detection(self):
         from hybrid_agent.app import _already_running

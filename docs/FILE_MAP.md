@@ -50,6 +50,7 @@
 | `hybrid_agent/core/config.py` | [CORE / config] Configuration, read from environment variables (and an optional .env file). |
 | `hybrid_agent/core/errors.py` | [CORE / errors] Exception types shared across the package. |
 | `hybrid_agent/core/home.py` | [CORE / home] The portable home folder: one directory holds everything the suite needs. |
+| `hybrid_agent/core/localserver.py` | [CORE / localserver] The HTTP server used for 127.0.0.1: the GUI, the drills' test sites, the tests. |
 | `hybrid_agent/core/messages.py` | [CORE / messages] Provider-neutral message types. |
 | `hybrid_agent/core/pyexe.py` | [CORE / pyexe] How to start "a Python" - as a normal install, or inside the packaged app. |
 | `hybrid_agent/council/__init__.py` | [COUNCIL] Groundwork for a council of agents that deliberate together. |

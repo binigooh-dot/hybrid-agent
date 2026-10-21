@@ -24,7 +24,7 @@ import urllib.parse
 import webbrowser
 from collections.abc import Callable
 from dataclasses import asdict
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
 from .. import __version__
@@ -34,6 +34,7 @@ from ..core.agent import DEFAULT_SYSTEM_PROMPT, Agent
 from ..core.config import Config
 from ..core.errors import AgentCancelled, ToolError
 from ..core.home import home_dir, state_dir
+from ..core.localserver import LocalServer
 from ..council.protocols import PROTOCOLS
 from ..council.roles import ROLES
 from ..personas import EXPRESSIONS, Persona, delete_persona, load_personas, random_face, render_all, save_persona
@@ -593,7 +594,7 @@ class Handler(BaseHTTPRequestHandler):
             self.app.bus.unsubscribe(q)
 
 
-class GuiServer(ThreadingHTTPServer):
+class GuiServer(LocalServer):
     daemon_threads = True
     allow_reuse_address = True
 

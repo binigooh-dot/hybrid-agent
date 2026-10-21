@@ -40,6 +40,11 @@ Also:
     600 MB allocation succeeded). The file-size cap held. The drill and docs now say so instead of failing.
   - **macOS `wc` pads its numbers** (`size= 1048576`), so the drill's file-size check misread a working cap.
     It's now parsed robustly.
+- **Second macOS run:** all 165 tests passed. Two drills that start a local test web server hung for 15 s.
+  Python's HTTPServer looks up its own DNS name on start (`socket.getfqdn`), which can stall for seconds
+  on some machines (macOS tests also took 61 s versus 24 s on Linux). A shared `core/localserver.py` server
+  skips the lookup and is used by the GUI (faster app start on a Mac too), the drills and the tests. A
+  hung drill now also reports where it was stuck, so CI logs show the exact line.
 - **Windows dry run:** the whole suite ran on Windows Python 3.12 under Wine before pushing. The only
   failures were two Wine-only differences (no git in Wine; Wine's symlinks), both of which pass on the real
   Windows runner.

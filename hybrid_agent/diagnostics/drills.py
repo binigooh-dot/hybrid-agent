@@ -21,12 +21,13 @@ import tracemalloc
 import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
 from ..backends import BackendUnavailable, ScriptedBackend
 from ..core.agent import Agent
 from ..core.errors import ToolError
+from ..core.localserver import LocalServer
 from ..core.messages import LLMResponse, Message, ToolCall
 from ..security.guards import check_shell_command
 from ..tools import ToolContext, build_full_registry
@@ -349,7 +350,7 @@ class _Redirector(BaseHTTPRequestHandler):
 
 
 def _local_server():
-    srv = ThreadingHTTPServer(("127.0.0.1", 0), _Redirector)
+    srv = LocalServer(("127.0.0.1", 0), _Redirector)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv
 
@@ -521,7 +522,7 @@ def drill_injection(sb):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
-    srv = ThreadingHTTPServer(("127.0.0.1", 0), Page)
+    srv = LocalServer(("127.0.0.1", 0), Page)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     try:
         b = ScriptedBackend([

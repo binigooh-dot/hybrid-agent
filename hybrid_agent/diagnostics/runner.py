@@ -13,6 +13,7 @@ import json
 import threading
 import time
 from dataclasses import asdict, dataclass
+from pathlib import Path
 
 from .drills import DRILLS
 from .harness import NetworkTripwire, ProcessTripwire, Sandbox
@@ -33,6 +34,17 @@ class Result:
     scenario: str = ""
 
 
+def _stuck_at(t: threading.Thread) -> str:
+    """Where a hung drill's thread is waiting: the innermost frames, so a hang can be diagnosed from CI logs."""
+    import sys
+    import traceback
+    frame = sys._current_frames().get(t.ident or -1)
+    if frame is None:
+        return ""
+    stack = traceback.extract_stack(frame)[-5:]
+    return " - stuck at: " + " <- ".join(f"{Path(f.filename).name}:{f.lineno} {f.name}" for f in reversed(stack))
+
+
 def run_drill(d, timeout: float = 15.0) -> Result:
     box: dict = {}
 
@@ -49,7 +61,7 @@ def run_drill(d, timeout: float = 15.0) -> Result:
     t.start()
     t.join(SLOW.get(d.key, timeout))
     secs = time.monotonic() - start
-    passed, detail = box.get("out", (False, f"HUNG: no result after {secs:.0f}s"))
+    passed, detail = box.get("out", (False, f"HUNG: no result after {secs:.0f}s{_stuck_at(t)}"))
     return Result(d.key, d.title, d.category, d.severity, bool(passed), detail, secs, d.scenario)
 
 

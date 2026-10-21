@@ -7,9 +7,10 @@ from __future__ import annotations
 import json
 import tempfile
 import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
+from hybrid_agent.core.localserver import LocalServer
 from hybrid_agent.core.messages import ToolCall
 from hybrid_agent.tools import ToolContext, build_full_registry
 
@@ -38,7 +39,7 @@ class ToolTestCase:
 
 def serve(test, handler_cls) -> str:
     """Start an HTTP server on a free port for the duration of a test; return its base URL."""
-    srv = HTTPServer(("127.0.0.1", 0), handler_cls)
+    srv = LocalServer(("127.0.0.1", 0), handler_cls)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     test.addCleanup(srv.server_close)
     test.addCleanup(srv.shutdown)
