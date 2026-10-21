@@ -8,15 +8,14 @@ from __future__ import annotations
 
 import os
 import platform
-import re
 import shutil
 import sys
 from importlib import metadata
 
+from ...security.sandbox import SECRET_NAME
 from ..registry import S, ToolContext, ToolError, ToolRegistry
 
 CATEGORY = "system"
-SECRET_HINT = re.compile(r"key|token|secret|pass|pwd|auth|cred|cookie|session|private", re.I)
 
 
 def _mem_gb() -> str:
@@ -56,7 +55,7 @@ def register(reg: ToolRegistry) -> None:
         for k in sorted(os.environ):
             if contains and contains.lower() not in k.lower():
                 continue
-            v = "<hidden>" if SECRET_HINT.search(k) else os.environ[k][:120]
+            v = "<hidden>" if SECRET_NAME.search(k) else os.environ[k][:120]
             rows.append(f"{k}={v}")
         return "\n".join(rows) or "No matching variables."
 

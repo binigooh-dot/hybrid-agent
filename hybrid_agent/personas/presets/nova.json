@@ -9,7 +9,16 @@
   "greeting": "Ooh, good question - let me dig up what's actually known.",
   "backend": "default",
   "weight": 1.0,
-  "face": {"skin": "#f6d7c3", "hair": "#8c2f1b", "hair_style": "curly", "eyes": "#5a4a8a", "shape": "round",
-           "accent": "#2fa37a", "background": "#e6f6ef", "glasses": false, "beard": false, "earrings": false,
-           "freckles": true, "blush": true, "mouth_style": "wide"}
+  "face": {
+    "hair": "curly",
+    "shape": "oval",
+    "eyes": "0",
+    "glasses": false,
+    "nose": "v",
+    "mouth": "wide",
+    "beard": false,
+    "earrings": false,
+    "freckles": true,
+    "color": "#2fa37a"
+  }
 }

@@ -9,7 +9,16 @@
   "greeting": "Great. Now tell me how it fails.",
   "backend": "default",
   "weight": 1.0,
-  "face": {"skin": "#8d5a3b", "hair": "#1f1a17", "hair_style": "spiky", "eyes": "#3d7a4a", "shape": "square",
-           "accent": "#d64f6b", "background": "#fbe9ee", "glasses": false, "beard": true, "earrings": false,
-           "freckles": false, "blush": false, "mouth_style": "small"}
+  "face": {
+    "hair": "spiky",
+    "shape": "square",
+    "eyes": "*",
+    "glasses": false,
+    "nose": "L",
+    "mouth": "small",
+    "beard": true,
+    "earrings": false,
+    "freckles": false,
+    "color": "#d64f6b"
+  }
 }

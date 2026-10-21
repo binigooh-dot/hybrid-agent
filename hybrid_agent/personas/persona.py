@@ -5,17 +5,14 @@
       "backend": "default", "tools": null, "weight": 1.0,
       "personality": "Calm and fair ...", "speaking_style": "Measured, uses analogies",
       "greeting": "Let's hear everyone out.",
-      "face": {"skin": "#d39b6e", "hair_style": "bun", "glasses": true, ...},
-      "image": null
+      "face": {"hair": "bun", "shape": "round", "glasses": true, "color": "#6b5bd6", ...}
     }
 
 Personas are plain JSON files. Built-in presets live in personas/presets/;
 your own go in the folder named by AGENT_PERSONA_DIR (default ./personas).
 A user persona with the same id overrides a preset.
 
-`image` is optional: a path (inside the persona folder) or https URL of a
-picture to use instead of the drawn face - the groundwork for generated
-portraits or animated avatars later.
+Faces are ASCII text (faces.py); older files with an "image" field still load (it's ignored).
 """
 from __future__ import annotations
 
@@ -45,7 +42,6 @@ class Persona:
     tools: str | None = None
     weight: float = 1.0
     face: dict = field(default_factory=dict)
-    image: str | None = None
     builtin: bool = False
 
     def __post_init__(self):
@@ -55,8 +51,6 @@ class Persona:
             raise ValueError(f"persona {self.id}: unknown role '{self.role}' (known: {', '.join(ROLES)})")
         if not isinstance(self.weight, (int, float)) or not 0 < self.weight <= 10:
             raise ValueError(f"persona {self.id}: weight must be between 0 and 10")
-        if self.image and not (self.image.startswith("https://") or _ID.match(Path(self.image).stem or "x")):
-            raise ValueError(f"persona {self.id}: image must be an https URL or a file name in the persona folder")
         self.name = str(self.name)[:40] or self.id
         self.face = normalise_face(self.face or random_face(self.id))
         self.title = self.title or ROLES[self.role].title
@@ -65,7 +59,7 @@ class Persona:
     @classmethod
     def from_dict(cls, d: dict, builtin: bool = False) -> "Persona":
         known = set(cls.__dataclass_fields__) - {"builtin"}
-        unknown = set(d) - known - {"_comment"}
+        unknown = set(d) - known - {"_comment", "image"}   # image: legacy (pre-ASCII faces)
         if unknown:
             raise ValueError(f"unknown persona field(s): {', '.join(sorted(unknown))}")
         return cls(**{k: v for k, v in d.items() if k in known}, builtin=builtin)

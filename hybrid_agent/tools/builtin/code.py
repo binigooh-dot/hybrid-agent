@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import ast
 import json
-import os
 import re
 import sys
 
@@ -19,9 +18,6 @@ from ..registry import S, ToolContext, ToolError, ToolRegistry
 from .shell import run_process
 
 CATEGORY = "code"
-# Environment variables that make git run other programs.
-_GIT_ENV_UNSAFE = {"GIT_EXTERNAL_DIFF", "GIT_SSH", "GIT_SSH_COMMAND", "GIT_ASKPASS", "GIT_EDITOR",
-                   "GIT_SEQUENCE_EDITOR", "GIT_PROXY_COMMAND", "GIT_CONFIG_PARAMETERS"}
 
 
 def python_outline(source: str) -> list[str]:
@@ -129,12 +125,13 @@ def register(reg: ToolRegistry) -> None:
         hardened = ["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
                     "-c", "core.pager=cat", "-c", "core.sshCommand=false", "-c", "credential.helper=",
                     "-c", "protocol.ext.allow=never", "-c", "protocol.file.allow=user",
-                    "-c", "diff.external=", "-c", "core.editor=false", "--no-pager"]
+                    "-c", "diff.external=", "-c", "core.editor=false",
+                    # the agent must never sign commits with YOUR keys (they're hidden in the sandbox anyway)
+                    "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", "--no-pager"]
         if args and args[0] in {"diff", "log", "show"}:
             args = (args[0], "--no-ext-diff", "--no-textconv", *args[1:])
-        env = {k: v for k, v in os.environ.items() if k not in _GIT_ENV_UNSAFE}
-        env.update(GIT_TERMINAL_PROMPT="0", GIT_CONFIG_NOSYSTEM="1", GIT_PAGER="cat")
-        return run_process([*hardened, *args], ctx, env=env)
+        return run_process([*hardened, *args], ctx,
+                           env_overrides={"GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1", "GIT_PAGER": "cat"})
 
     @t("git_status", "Show git status (branch, staged/unstaged/untracked files) of the workspace repo.", S())
     def git_status(ctx: ToolContext):

@@ -17,6 +17,7 @@ import string
 import urllib.parse
 import uuid
 
+from ...security import backup
 from ...security.guards import (
     compile_regex,
     read_text_limited,
@@ -24,6 +25,7 @@ from ...security.guards import (
     run_regex_isolated,
 )
 from ..registry import S, ToolContext, ToolError, ToolRegistry
+from .files import wpath
 
 CATEGORY = "text"
 STOPWORDS = set("the a an and or of to in on for with is are was were be been it this that as at by "
@@ -88,7 +90,7 @@ def register(reg: ToolRegistry) -> None:
        S(path="string", pattern="string", replacement="string", count="integer?|Max replacements, 0 = all"),
        risk="write")
     def regex_replace_file(ctx: ToolContext, path: str, pattern: str, replacement: str, count: int = 0):
-        p = resolve_in_workspace(ctx.workspace, path)
+        p = wpath(ctx, path)
         if not p.is_file():
             raise ToolError(f"No such file: {path}")
         text = read_text_limited(p)
@@ -102,6 +104,7 @@ def register(reg: ToolRegistry) -> None:
         except re.error as e:
             raise ToolError(f"Bad replacement: {e}") from None
         if n:
+            backup.snapshot(ctx.workspace, p, "regex replace")
             p.write_text(new)
         return f"{n} replacement(s) in {path}"
 

@@ -85,6 +85,20 @@ def _index_path(ctx: ToolContext):
     return ctx.workspace / ".agent" / "doc_index.json"
 
 
+_CACHE: dict[str, tuple[float, dict]] = {}   # index path -> (mtime, parsed index)
+
+
+def _load_index(path) -> dict:
+    """Parsed index, re-read only when the file has changed (searches are then instant)."""
+    mtime = path.stat().st_mtime
+    hit = _CACHE.get(str(path))
+    if hit and hit[0] == mtime:
+        return hit[1]
+    data = json.loads(path.read_text())
+    _CACHE[str(path)] = (mtime, data)
+    return data
+
+
 def register(reg: ToolRegistry) -> None:
     t = reg.group(CATEGORY)
 
@@ -122,7 +136,7 @@ def register(reg: ToolRegistry) -> None:
         p = _index_path(ctx)
         if not p.exists():
             raise ToolError("No index yet - call index_documents first.")
-        idx = json.loads(p.read_text())
+        idx = _load_index(p)
         hits = bm25_rank(query, idx["chunks"])[:top_k]
         if not hits:
             return "No relevant passages found."

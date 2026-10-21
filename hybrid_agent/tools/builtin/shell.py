@@ -15,7 +15,9 @@ import subprocess
 import sys
 import threading
 
-from ...security.guards import check_shell_command
+from ...security.guards import check_shell_command, ensure_disk_space
+from ...security.sandbox import Limits
+from ...security.sandbox import wrap as sandbox_wrap
 from ..registry import S, ToolContext, ToolError, ToolRegistry
 
 CATEGORY = "shell"
@@ -47,7 +49,7 @@ def _kill_tree(proc: subprocess.Popen) -> None:
 
 
 def run_process(argv_or_cmd, ctx: ToolContext, shell: bool = False, stdin: str | None = None,
-                timeout: int | None = None, env: dict | None = None) -> str:
+                timeout: int | None = None, env_overrides: dict | None = None) -> str:
     """Shared runner (also used by code/git tools). Returns a readable report.
 
     * runs in its own process group/session so a timeout kills the whole tree
@@ -55,6 +57,11 @@ def run_process(argv_or_cmd, ctx: ToolContext, shell: bool = False, stdin: str |
     * stdin is closed after writing, so interactive prompts get EOF instead of hanging
     """
     limit = timeout or ctx.shell_timeout
+    ensure_disk_space(ctx.workspace, ctx.min_free_mb)
+    argv_or_cmd, env_final, shell, mode = sandbox_wrap(
+        argv_or_cmd, shell, ctx.workspace, ctx.sandbox, ctx.require_sandbox,
+        Limits(cpu_seconds=max(limit * 4, 60)))
+    env = {**env_final, **(env_overrides or {})}   # overrides only add; secrets stay out
     try:
         proc = subprocess.Popen(
             # Reviewed (B602): run_shell's purpose; approval + blocklist
@@ -98,7 +105,7 @@ def run_process(argv_or_cmd, ctx: ToolContext, shell: bool = False, stdin: str |
     def text(chunks, total):
         s = b"".join(chunks).decode(errors="replace")
         return s + (f"\n...[{total - MAX_CAPTURE} more bytes discarded]" if total > MAX_CAPTURE else "")
-    parts = [f"exit code: {proc.returncode}"]
+    parts = [f"exit code: {proc.returncode}" + ("" if mode.startswith("strict") else f"  (sandbox: {mode})")]
     if n_out[0]:
         parts.append("stdout:\n" + text(out, n_out[0]))
     if n_err[0]:
@@ -114,7 +121,7 @@ def register(reg: ToolRegistry) -> None:
        S(command="string", timeout="integer?|Seconds, default from config"),
        risk="execute", requires_approval=True)
     def run_shell(ctx: ToolContext, command: str, timeout: int | None = None):
-        check_shell_command(command)
+        check_shell_command(command, ctx.workspace)
         # Reviewed (B604): run_shell's purpose; approval + blocklist
         return run_process(command, ctx, shell=True, timeout=timeout)  # noqa: S604 - run_shell exists to run shell commands; approval + blocklist gate it  # nosec B604
 

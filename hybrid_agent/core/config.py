@@ -67,6 +67,11 @@ class Config:
     log_dir: Path | None = field(default_factory=lambda: Path("logs"))   # None = no logs
     searxng_url: str | None = None       # optional self-hosted search, no key
     allow_private_network: bool = False  # let web tools reach your LAN / this computer
+    # --- Hard safety (see docs/07) ---
+    sandbox: str = "auto"                # auto | strict | limits | off - isolation for commands
+    require_sandbox: bool = False        # refuse to run commands without strict isolation
+    safe_mode: bool = False              # read-only agents: no write or execute tools at all
+    min_free_mb: int = 1024              # refuse writes when free disk drops below this
     # Which tools the agent gets (see tools/profiles.py). "auto" = "full" when
     # Claude is the main model, "core" for local models (smaller context).
     tool_profile: str = "auto"
@@ -85,7 +90,8 @@ class Config:
         """Fail early, with a clear message, on settings that can't work."""
         choices = {"backend": {"auto", "claude", "local", "scripted"}, "local_provider": {"ollama", "openai"},
                    "local_tool_mode": {"auto", "native", "prompt"},
-                   "claude_effort": {"low", "medium", "high", "xhigh", "max"}}
+                   "claude_effort": {"low", "medium", "high", "xhigh", "max"},
+                   "sandbox": {"auto", "strict", "limits", "off"}}
         for attr, allowed in choices.items():
             if getattr(self, attr) not in allowed:
                 raise ValueError(f"{attr} = {getattr(self, attr)!r}; expected one of {', '.join(sorted(allowed))}")
@@ -122,6 +128,10 @@ class Config:
             log_dir=Path(e("AGENT_LOG_DIR", "logs")),
             searxng_url=e("SEARXNG_URL") or None,
             allow_private_network=_bool("AGENT_ALLOW_PRIVATE_NETWORK", False),
+            sandbox=e("AGENT_SANDBOX", "auto"),
+            require_sandbox=_bool("AGENT_REQUIRE_SANDBOX", False),
+            safe_mode=_bool("AGENT_SAFE_MODE", False),
+            min_free_mb=int(e("AGENT_MIN_FREE_MB", "1024")),
             tool_profile=e("AGENT_TOOL_PROFILE", "auto"),
             council_config=Path(e("COUNCIL_CONFIG", "")) if e("COUNCIL_CONFIG") else None,
             council_workers=int(e("COUNCIL_WORKERS", "1")),

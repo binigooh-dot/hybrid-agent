@@ -19,10 +19,44 @@ the one before misses, so no single mistake is fatal.
 | **Secret redaction** | `security/redact.py` | API keys, tokens, JWTs, private keys and `password=` values are scrubbed from logs, transcripts and the GUI feed |
 | **Data integrity** | `memory.py`, `documents.py` | Atomic writes and a shared lock; a corrupt memory file is moved aside, never wiped |
 | **GUI lock-down** | `gui/server.py` | 127.0.0.1 only, per-launch token, Host/Origin checks, strict CSP, text-only rendering of model output |
+| **Kernel sandbox** | `security/sandbox.py` | Every command runs in **bubblewrap** (Linux) or **sandbox-exec** (macOS): the whole system is mounted read-only, your home folder is replaced by an empty one (keys and files invisible), `/tmp` is private, and only the workspace is writable. The workspace's `.agent/` folder (backups) stays read-only |
+| **Kernel limits** | `security/sandbox.py` | The OS itself caps every command and its children: CPU time, memory, size of any file written, open files, no core dumps |
+| **Environment scrubbing** | `security/sandbox.py` `clean_env` | API keys, tokens and passwords, plus variables that make programs load code (`LD_PRELOAD`, `GIT_SSH_COMMAND`, `GIT_CONFIG_*`…), never reach a command |
+| **Protected paths** | `security/protected.py` | OS, boot, firmware and device folders; your keys, credentials and shell start-up files; the agent's own code and config. They can't be the workspace, and modifying commands that name them are refused |
+| **Hardware & system guard** | `security/guards.py` | Firmware/BIOS writes, disk partitioning, kernel modules, sysctl, service, user-account and firewall changes, writes to `/dev/sd*` are refused even when approved |
+| **Undo (backups)** | `security/backup.py` | Overwrite, edit, move and delete back up the original first; delete moves to a trash can. `restore_backup` or the GUI's Restore puts it back. 1 GB total, oldest pruned |
+| **Disk guard** | `security/guards.py` `ensure_disk_space` | Writes and commands are refused when free space would drop below `AGENT_MIN_FREE_MB` or 2 % of the disk, so the agent can't fill your drive |
+| **Safe mode** | `AGENT_SAFE_MODE=1` | The agent only gets read and network tools: nothing can be written or run |
+| **Audit log** | `security/audit.py` | Every write/execute tool call (redacted) is appended to `logs/audit.jsonl`, outside the workspace |
+| **Integrity manifest** | `security/audit.py` | Releases ship `MANIFEST.sha256`; the doctor, diagnostics and the GUI flag any changed, missing or added package file |
 
-**What this is not:** a sandbox against a determined attacker. `run_shell` and `run_python` still run as
-*you*. The blocklist catches mistakes and obvious attacks. For untrusted tasks, run the agent in a
-container or VM and keep approval on (no `-y`).
+```
+             your computer
+ ┌────────────────────────────────────────────────┐
+ │  /etc /usr /boot /dev …   READ-ONLY            │
+ │  ~/ (keys, configs, files) HIDDEN (empty tmpfs) │
+ │  ┌───────────────── sandbox ─────────────────┐ │
+ │  │  workspace/          writable             │ │
+ │  │  workspace/.agent/   read-only (undo)     │ │
+ │  │  /tmp                private, thrown away │ │
+ │  │  CPU · memory · file size capped by kernel │ │
+ │  │  no API keys in the environment            │ │
+ │  └───────────────────────────────────────────┘ │
+ └────────────────────────────────────────────────┘
+```
+
+Analogy: a glovebox in a lab. The agent works inside with full dexterity, but nothing it does can touch
+the rest of the room, and everything it changes can be put back.
+
+**Sandbox modes** (`AGENT_SANDBOX`): `auto` (default: strict when available, else limits), `strict`
+(refuse to run without it), `limits` (kernel limits + env scrubbing, no filesystem isolation), `off`.
+`AGENT_REQUIRE_SANDBOX=1` refuses commands when strict isolation is missing. On Linux install it with
+`sudo apt install bubblewrap` (Fedora: `dnf install bubblewrap`). macOS has `sandbox-exec` built in. Windows
+gets environment scrubbing only, so there keep approval on and consider WSL.
+
+**Honest limits:** network access from inside the sandbox is not cut (some tasks need `pip install`);
+in `limits` mode commands can still read your files. For untrusted tasks, use `strict`, keep approval on
+(no `-y`), or turn on safe mode.
 
 ## Fire drills
 
@@ -77,6 +111,22 @@ defence fails the tests.
 | The council survives failures | medium | PASS | PASS |
 | **Total** | | **14 / 29, 5 critical failures** | **29 / 29, 0 critical failures** |
 
+### Hard-safety drills (added with the sandbox)
+
+| Drill | Severity | Result |
+|---|---|---|
+| Commands can't touch the system or your home folder (`hard.sandbox_isolation`) | critical | PASS: `/etc` read-only, home empty, fake API key invisible |
+| Kernel limits stop runaway memory and giant files (`hard.kernel_limits`) | high | PASS: 600 MB allocation refused, file capped at 1 MB |
+| Code-injection variables never reach commands (`hard.env_injection`) | high | PASS |
+| Protected paths can't be the workspace or be modified (`hard.protected_workspace`) | critical | PASS: 30+ hardware/system/key commands refused, no false positives |
+| The agent can't erase its own undo history (`hard.internal_data`) | high | PASS |
+| Destructive file changes can be undone (`hard.undo`) | high | PASS: overwrite, edit, move and delete all restored |
+| A full disk refuses writes cleanly (`hard.disk_full`) | high | PASS |
+| Safe mode removes every write/execute tool (`hard.safe_mode`) | high | PASS |
+| Changes are recorded in the audit log, redacted (`hard.audit`) | medium | PASS |
+| Tampered package files are detected (`hard.integrity`) | high | PASS |
+| **Total** | | **39 / 39, 0 critical failures** |
+
 ## Code health
 
 ```bash
@@ -94,9 +144,9 @@ python scripts/health_check.py --fast   # skip drills, coverage and the browser 
 | Minimum Python version | vermin | 3.10 |
 | Complexity | radon | nothing rated D or worse |
 | Real-browser GUI test | Playwright + Chromium (`scripts/ui_smoke.py`) | no JavaScript errors; works at phone width |
-| Safety drills | `diagnose` | 29/29 |
+| Safety drills | `diagnose` | 39/39 |
 
 Exceptions that are deliberate (each annotated in code with a reason):
 - `except Exception` only at boundaries that must never crash: the tool runner, job threads, doctor, diagnostics.
-- `shell=True` only in `run_shell`, which exists to run shell commands, behind approval and the blocklist.
+- `shell=True` only in `run_shell` (which exists to run shell commands, behind approval, the blocklist and the sandbox) and in one drill that runs a fixed command.
 - `tarfile.extractall` only after every member has been validated.

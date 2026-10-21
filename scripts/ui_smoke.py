@@ -4,8 +4,9 @@
     python scripts/ui_smoke.py [out_dir]
 
 Starts the GUI in-process with the scripted backend (no model needed), then:
-runs a council vote, chats, opens the persona editor, triggers an approval
-prompt, filters tools, runs the setup doctor. Fails on any JavaScript error.
+runs a council vote, chats, opens the persona editor (and checks the ASCII
+face really animates), triggers an approval prompt, filters tools, restores a
+backup from the Safety tab, runs the setup doctor. Fails on any JavaScript error.
 """
 from __future__ import annotations
 
@@ -43,7 +44,7 @@ def main(out: Path) -> int:
 
         # --- council
         page.fill("#c-question", "Should a beginner learn Rust or Go first?")
-        page.select_option("#c-protocol", "vote")
+        page.click("[data-proto=vote]")
         page.fill("#c-options", "Rust, Go")
         page.click("#c-run")
         page.wait_for_selector("#c-final:not(.hidden)", timeout=20000)
@@ -61,8 +62,14 @@ def main(out: Path) -> int:
         # --- persona editor
         page.click("[data-tab=personas]")
         page.locator(".pcard", has_text="The Skeptic").first.click()
-        page.click("#p-expr >> text=skeptical")
-        page.wait_for_timeout(400)
+        page.click("#p-expr >> text=speaking")
+        page.wait_for_timeout(300)
+        frames = set()
+        for _ in range(6):                       # the talking face must cycle frames
+            frames.add(page.inner_text("#p-preview"))
+            page.wait_for_timeout(240)
+        if len(frames) < 2:
+            errors.append("ASCII face did not animate")
         page.screenshot(path=str(out / "3_personas.png"), full_page=True)
 
         # --- approval prompt (as if an agent asked to run a command)
@@ -81,15 +88,27 @@ def main(out: Path) -> int:
         page.click("[data-tab=tools]")
         page.fill("#t-search", "csv")
         page.screenshot(path=str(out / "5_tools.png"), full_page=True)
+        from hybrid_agent.security.backup import snapshot
+        victim = cfg.workspace / "notes.txt"
+        victim.write_text("original")
+        snapshot(cfg.workspace, victim, "edit")
+        victim.write_text("changed by agent")
+        page.on("dialog", lambda d: d.accept())
         page.click("[data-tab=safety]")
+        page.wait_for_selector("#s-backups >> text=Restore")
+        page.screenshot(path=str(out / "6_safety.png"), full_page=True)
+        page.click("#s-backups >> text=Restore")
+        page.wait_for_timeout(500)
+        if victim.read_text() != "original":
+            errors.append("Restore button did not restore the file")
         page.click("#s-doctor")
         page.wait_for_selector("#s-table tr >> nth=1")
-        page.screenshot(path=str(out / "6_safety.png"), full_page=True)
+        page.screenshot(path=str(out / "7_checks.png"), full_page=True)
 
         # --- phone width
         page.set_viewport_size({"width": 390, "height": 844})
         page.click("[data-tab=council]")
-        page.screenshot(path=str(out / "7_phone.png"), full_page=True)
+        page.screenshot(path=str(out / "8_phone.png"), full_page=True)
         overflow = page.evaluate("document.documentElement.scrollWidth > window.innerWidth + 1")
         browser.close()
     srv.shutdown()

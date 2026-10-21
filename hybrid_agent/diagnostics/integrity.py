@@ -4,7 +4,8 @@ Fast checks that need no model and no network:
   * every module compiles
   * every tool's schema matches its function signature, and every tool is labelled
   * every profile references real tools; every council role references a real profile
-  * the persona presets load and render faces (when the personas package exists)
+  * the persona presets load and every face frame is well-formed ASCII
+  * the release manifest (if present) matches the installed files
 """
 from __future__ import annotations
 
@@ -48,19 +49,24 @@ def check_profiles_and_roles() -> tuple[bool, str]:
 
 
 def check_personas() -> tuple[bool, str]:
-    try:
-        from ..personas import load_presets
-        from ..personas.faces import EXPRESSIONS, render_face
-    except ImportError:
-        return True, "personas package not installed (skipped)"
+    from ..personas import load_presets, render_all
     presets = load_presets()
     for p in presets:
-        for ex in EXPRESSIONS:
-            svg = render_face(p.face, ex)
-            if not svg.startswith("<svg"):
-                return False, f"{p.id}: face '{ex}' did not render"
-    return True, f"{len(presets)} personas x {len(EXPRESSIONS)} expressions render"
+        for ex, frames in render_all(p.face).items():
+            for frame in frames:
+                rows = frame.split("\n")
+                if len(rows) != 7 or any(len(r) != 16 for r in rows) or not frame.isascii():
+                    return False, f"{p.id}: face '{ex}' is malformed"
+    return True, f"{len(presets)} personas: every expression and animation frame is 7x16 ASCII"
 
 
-CHECKS = [("compile", check_compile), ("tools", check_tools),
-          ("profiles+roles", check_profiles_and_roles), ("personas", check_personas)]
+def check_manifest() -> tuple[bool, str]:
+    from ..security.audit import verify_manifest
+    status, detail = verify_manifest()
+    if status == "changed" and (PKG.parent / ".git").exists():
+        return True, f"development checkout differs from last release build: {detail}"
+    return status != "changed", detail
+
+
+CHECKS = [("compile", check_compile), ("tools", check_tools), ("profiles+roles", check_profiles_and_roles),
+          ("personas", check_personas), ("manifest", check_manifest)]

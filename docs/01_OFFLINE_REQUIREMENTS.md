@@ -8,7 +8,7 @@ Think of the agent as a car:
 | Engine | The **local model** (e.g. qwen2.5 running in Ollama) | No |
 | Fuel line | The **local backend**, which sends the conversation to the model over HTTP | No |
 | Steering + driver | The **agent loop** (think → use a tool → look at the result → repeat) | No |
-| Hands | The **tools** (files, shell, web… 78 in all) | No |
+| Hands | The **tools** (files, shell, web… 80 in all) | No |
 | Seatbelt + brakes | **Safety**: sandbox, command blocklist, approval prompts | No |
 | Dashboard | **Doctor** (readiness check) and **logs** | No |
 | Turbocharger | **Claude** | Yes. Optional |
@@ -43,7 +43,7 @@ Not needed: pip packages, internet access (except for the web tools), or any acc
 | 5 | **Agent loop** with guards | `core/agent.py` | The think → act → observe cycle. Never runs cut-off tool calls, stops repeated identical calls, rolls back if the model fails, and can be stopped |
 | 6 | **Context trimming** | `Agent._trim_history` | An 8k-token model overflows on long sessions. Old tool outputs are shortened first (local models only; Claude's history is never edited) |
 | 7 | **Tool registry + argument validation** | `tools/registry.py` | Local models make more argument mistakes. Clear errors ("unknown argument 'pth' (valid: path…)") let them fix the call |
-| 8 | **Tool profiles** | `tools/profiles.py` | All 78 tool descriptions take about 6k tokens, which would fill an 8k context. Profiles send 7–23 tools instead |
+| 8 | **Tool profiles** | `tools/profiles.py` | All 80 tool descriptions take about 6k tokens, which would fill an 8k context. Profiles send 7–23 tools instead |
 | 9 | **Tool suite** (78 tools, stdlib only) | `tools/builtin/*.py` | What the agent can do. See [04_TOOLS.md](04_TOOLS.md) |
 | 10 | **Key-free web search + knowledge** | `tools/builtin/web.py`, `knowledge.py` | DuckDuckGo/SearXNG, Wikipedia, arXiv, Open-Meteo weather and a dictionary: all keyless |
 | 11 | **Local document search** (BM25) | `tools/builtin/documents.py` | Searches your files without an embeddings API or model, and keeps context small |

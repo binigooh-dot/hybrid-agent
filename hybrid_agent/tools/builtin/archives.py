@@ -11,8 +11,10 @@ import tarfile
 import zipfile
 from pathlib import Path
 
+from ...security import backup
 from ...security.guards import resolve_in_workspace
 from ..registry import S, ToolContext, ToolError, ToolRegistry
+from .files import wpath
 
 CATEGORY = "archives"
 MAX_EXTRACT_BYTES = 1_000_000_000   # total uncompressed size allowed (zip-bomb protection)
@@ -52,7 +54,8 @@ def register(reg: ToolRegistry) -> None:
          paths={"type": "array", "items": {"type": "string"}}),
        risk="write")
     def archive_create(ctx: ToolContext, output: str, paths: list):
-        out = resolve_in_workspace(ctx.workspace, output)
+        out = wpath(ctx, output)
+        backup.snapshot(ctx.workspace, out, "archive overwrite")
         root = ctx.workspace.resolve()
         files: list[Path] = []
         for rel in paths:
@@ -82,7 +85,9 @@ def register(reg: ToolRegistry) -> None:
         if not p.is_file():
             raise ToolError(f"No such file: {path}")
         dest_rel = destination or p.name.split(".")[0]
-        dest = resolve_in_workspace(ctx.workspace, dest_rel)
+        dest = wpath(ctx, dest_rel)
+        if dest.exists() and any(dest.iterdir()):
+            backup.snapshot(ctx.workspace, dest, "extract over")
         dest.mkdir(parents=True, exist_ok=True)
 
         def safe(name: str) -> Path:

@@ -1,17 +1,17 @@
 # Hybrid Agent: local agents, a council with faces, and Claude when you want it
 
 A tool-using AI agent that **runs entirely on your own computer with no API key** (a local model does
-the thinking), an optional **Claude** brain, a **council** of persona agents with procedurally drawn
-**faces** that deliberate together, and **Agent Studio**, a local web GUI to drive it all.
+the thinking), an optional **Claude** brain, a **council** of persona agents with animated **ASCII
+faces** that deliberate together, and **Agent Studio**, a local web GUI to drive it all.
 
-- **78 tools in 16 categories** (files, shell, code/git, data, text, maths, time, web, network,
+- **80 tools in 16 categories** (files, shell, code/git, data, text, maths, time, web, network,
   knowledge, system, archives, memory, document search, planning, council board). **None needs a key.**
 - **Tool profiles** give each agent only what it needs (7–23 tools), so small models stay sharp.
 - **Council** with 8 roles, 4 protocols (roundtable, debate, vote, critique), mixed models and a shared blackboard.
-- **Personas with faces:** Sage, Vex and Nova built in, 7 live expressions, and a face editor in the GUI.
-- **Agent Studio GUI:** council stage, chat, persona editor, tool browser, safety centre, and Allow/Deny approvals.
+- **Personas with ASCII faces:** Sage, Vex and Nova built in, 7 expressions, talking and thinking animations, ~2 KB each, and a face builder in the GUI.
+- **Agent Studio GUI:** a 3-step council with a live stage, chat, face builder, tool browser, a safety centre with one-click undo, and clear Allow/Deny approvals.
 - **Agent Builder Knowledge Suite:** an interactive guide in one HTML file → [docs/agent_builder_suite.html](docs/agent_builder_suite.html)
-- **Security first:** 12 protective layers and **29 safety fire drills, all passing** (see [docs/07](docs/07_SAFETY_AND_DIAGNOSTICS.md)).
+- **Hard safety:** commands run in a kernel sandbox (system read-only, home hidden, CPU/memory/file caps), protected system/hardware/agent files, automatic backups with undo, a disk guard, safe mode, an audit log and an integrity manifest. **39 safety fire drills, all passing** (see [docs/07](docs/07_SAFETY_AND_DIAGNOSTICS.md)).
 - **Clean bill of health:** ruff, mypy, bandit, vulture all clean; Python 3.10+; tests pass on 3.11–3.13.
 - **No dependencies** in local mode (standard library only).
 
@@ -23,7 +23,7 @@ the thinking), an optional **Claude** brain, a **council** of persona agents wit
         └───┬─────────┬───┘                    └──────────────────┘
    chat()   │         │ tool calls                     ▲
    ┌────────▼───┐ ┌───▼──────────────────────┐  ┌──────┴───────┐
-   │  Router    │ │ 78 tools via a profile   │  │ Agent Studio │ 127.0.0.1 only
+   │  Router    │ │ 80 tools via a profile   │  │ Agent Studio │ 127.0.0.1 only
    │ Claude ────┤ │ validate → approve →     │  │ (web GUI)    │
    │ ↓ fallback │ │ security → run → limit   │  └──────────────┘
    │ Local model│ └──────────────────────────┘
@@ -68,6 +68,7 @@ mode the agent then uses Claude, with the local model as fallback.
 | `python3 -m hybrid_agent doctor` | Setup check (required vs optional) |
 | `python3 -m hybrid_agent tools` | All tools by category, with risk labels |
 | `--backend auto\|claude\|local\|scripted` · `--model` · `--tools PROFILE` · `--workspace DIR` · `-y` | Common options |
+| `AGENT_SANDBOX=strict` · `AGENT_SAFE_MODE=1` · `AGENT_MIN_FREE_MB` | Safety settings (see docs/07) |
 | `python3 scripts/health_check.py` | Full code-health scorecard (tests, lint, types, security, drills, browser) |
 
 Settings come from environment variables or `.env`; see [`.env.example`](.env.example).
@@ -78,11 +79,11 @@ Settings come from environment variables or `.env`; see [`.env.example`](.env.ex
 hybrid-agent/
 ├── hybrid_agent/
 │   ├── core/         [CORE]         agent loop, messages, config, errors
-│   ├── security/     [SECURITY]     workspace fence, blocklist, network guard, redaction, safe XML/regex
+│   ├── security/     [SECURITY]     fence, blocklist, sandbox, protected paths, backups, audit, network guard
 │   ├── backends/     [BACKENDS]     local (Ollama / OpenAI-compatible), claude, router, scripted
-│   ├── tools/        [TOOLS]        registry, profiles, builtin/ (15 modules, 78 tools)
+│   ├── tools/        [TOOLS]        registry, profiles, builtin/ (15 modules, 80 tools)
 │   ├── council/      [COUNCIL]      roles, members, protocols, ballots, blackboard
-│   ├── personas/     [PERSONAS]     characters + procedural SVG faces; presets/ (Sage, Vex, Nova)
+│   ├── personas/     [PERSONAS]     characters + animated ASCII faces; presets/ (Sage, Vex, Nova)
 │   ├── gui/          [GUI]          local web server, live events, approvals, knowledge-suite builder, static/
 │   ├── diagnostics/  [DIAGNOSTICS]  safety fire drills, tripwire harness, integrity checks
 │   └── cli/          [CLI]          command line, doctor
@@ -106,5 +107,5 @@ Every source file starts with a `[LAYER / name]` label. [docs/FILE_MAP.md](docs/
 | [03 Architecture](docs/03_ARCHITECTURE.md) | Layers, diagrams, design decisions |
 | [04 Tools](docs/04_TOOLS.md) | Full tool catalogue, profiles, adding tools (generated) |
 | [05 Council](docs/05_COUNCIL.md) | Roles, protocols, configs, personas in councils |
-| [06 GUI & personas](docs/06_GUI_AND_PERSONAS.md) | Agent Studio, faces, avatar roadmap |
+| [06 GUI & personas](docs/06_GUI_AND_PERSONAS.md) | Agent Studio, ASCII faces and animations, roadmap |
 | [07 Safety & diagnostics](docs/07_SAFETY_AND_DIAGNOSTICS.md) | Protective layers, fire-drill results, code health |

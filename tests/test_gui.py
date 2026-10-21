@@ -97,10 +97,27 @@ class GuiServerTests(unittest.TestCase):
             self.assertEqual(self.req("POST", "/api/personas", {"id": bad, "name": "x"})[0], 400, bad)
         self.assertEqual(self.req("DELETE", "/api/personas/..%2Fx")[0], 400)
 
-    def test_face_svg_is_sanitised(self):
-        status, body, _ = self.req("POST", "/api/face", {"face": {"skin": '"/><script>alert(1)</script>'}})
+    def test_face_values_come_from_fixed_menus(self):
+        evil = '"/><script>alert(1)</script>'
+        status, body, _ = self.req("POST", "/api/face", {"face": {"hair": evil, "color": evil, "eyes": evil}})
         self.assertEqual(status, 200)
-        self.assertNotIn("<script", body["svg"])
+        frames = [f for fs in body["faces"].values() for f in fs]
+        self.assertTrue(all("<" not in f and len(f.splitlines()) == 7 for f in frames))
+        self.assertEqual(len(body["faces"]["speaking"]), 4)       # talking animation
+        self.assertEqual(len(body["faces"]["thinking"]), 4)       # deliberating animation
+
+    def test_safety_and_restore(self):
+        from hybrid_agent.security.backup import snapshot
+        f = self.cfg.workspace / "keep.txt"
+        f.write_text("v1")
+        entry = snapshot(self.cfg.workspace, f, "edit")
+        f.write_text("v2")
+        _, s, _ = self.req("GET", "/api/safety")
+        self.assertIn(entry["id"], [b["id"] for b in s["backups"]])
+        self.assertGreater(s["protected"], 20)
+        self.assertEqual(self.req("POST", "/api/restore", {"id": entry["id"]})[1], {"restored": "keep.txt"})
+        self.assertEqual(f.read_text(), "v1")
+        self.assertEqual(self.req("POST", "/api/restore", {"id": "nope"})[0], 400)
 
     # ----------------------------------------------------------------- api
     def test_meta_tools_personas(self):
@@ -112,10 +129,10 @@ class GuiServerTests(unittest.TestCase):
         _, personas, _ = self.req("GET", "/api/personas")
         ids = {p["id"] for p in personas}
         self.assertTrue({"sage", "vex", "nova"} <= ids)
-        self.assertEqual(len(personas[0]["faces"]), 7)
+        self.assertEqual(len(personas[0]["faces"]), 8)          # 7 expressions + blink
 
     def test_persona_save_and_delete(self):
-        p = {"id": "atlas", "name": "Atlas", "role": "engineer", "face": {"hair_style": "spiky"}}
+        p = {"id": "atlas", "name": "Atlas", "role": "engineer", "face": {"hair": "spiky"}}
         status, saved, _ = self.req("POST", "/api/personas", p)
         self.assertEqual(status, 200)
         self.assertTrue((self.cfg.persona_dir / "atlas.json").exists())

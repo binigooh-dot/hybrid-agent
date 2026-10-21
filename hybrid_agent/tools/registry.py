@@ -55,11 +55,25 @@ class ToolContext:
     max_output: int = 20000
     shell_timeout: int = 60
     searxng_url: str | None = None
-    allow_private_network: bool = False                  # web tools may reach LAN/loopback (see core/netguard.py)
+    allow_private_network: bool = False                  # web tools may reach LAN/loopback (security/netguard.py)
+    sandbox: str = "auto"                                 # auto | strict | limits | off (security/sandbox.py)
+    require_sandbox: bool = False                         # refuse commands without strict isolation
+    min_free_mb: int = 1024                               # refuse writes below this much free disk
+    audit_dir: Path | None = None                         # where audit.jsonl goes (None = no audit log)
     agent_name: str = "agent"                             # who is calling (council members differ)
     state: dict[str, Any] = field(default_factory=dict)   # per-agent scratch (plan, ...)
     local_backend: Any = None                             # for delegate_to_local
     blackboard: Any = None                                # council.Blackboard, shared by members
+
+
+    @classmethod
+    def from_config(cls, cfg: Any, **overrides: Any) -> "ToolContext":
+        """The one place a Config becomes a ToolContext (CLI, council and GUI all use it)."""
+        base = dict(workspace=cfg.workspace, max_output=cfg.max_tool_output, shell_timeout=cfg.shell_timeout,
+                    searxng_url=cfg.searxng_url, allow_private_network=cfg.allow_private_network,
+                    sandbox=cfg.sandbox, require_sandbox=cfg.require_sandbox, min_free_mb=cfg.min_free_mb,
+                    audit_dir=cfg.log_dir)
+        return cls(**{**base, **overrides})
 
 
 @dataclass
@@ -251,6 +265,14 @@ class ToolRegistry:
             return ToolResult("Invalid arguments: " + "; ".join(errors), is_error=True)
         if tool.requires_approval and not self.ctx.approver(tool.name, call.arguments, f"{tool.risk} tool"):
             return ToolResult("The user declined to run this tool call.", is_error=True)
+        result = self._run(tool, call)
+        if tool.risk in {"write", "execute"}:   # flight recorder for every change
+            from ..security.audit import record
+            record(self.ctx.audit_dir, self.ctx.agent_name, tool.name, tool.risk, call.arguments,
+                   not result.is_error, result.content[:200] if result.is_error else "")
+        return result
+
+    def _run(self, tool: Tool, call: ToolCall) -> ToolResult:
         try:
             out = tool.func(self.ctx, **call.arguments)
         except ToolError as e:

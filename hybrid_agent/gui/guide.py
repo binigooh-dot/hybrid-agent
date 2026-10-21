@@ -34,6 +34,10 @@ ENV_VARS = [
     ("AGENT_TOOL_PROFILE", "auto", "Which tools the agent gets; see the Profile Builder."),
     ("AGENT_ALLOW_PRIVATE_NETWORK", "0", "1 = let web tools reach your LAN / this computer."),
     ("AGENT_PERSONA_DIR", "personas", "Folder for your persona JSON files."),
+    ("AGENT_SANDBOX", "auto", "auto | strict | limits | off. strict = read-only system, hidden home, only the workspace writable."),
+    ("AGENT_REQUIRE_SANDBOX", "0", "1 = refuse to run commands unless strict isolation is available."),
+    ("AGENT_SAFE_MODE", "0", "1 = read-only agent: no write or execute tools at all."),
+    ("AGENT_MIN_FREE_MB", "1024", "Refuse writes/commands when free disk space would drop below this."),
     ("SEARXNG_URL", "(unset)", "Optional self-hosted search engine (no key)."),
     ("COUNCIL_CONFIG", "(unset)", "Default council config file."),
     ("COUNCIL_WORKERS", "1", "Council members answering in parallel."),
@@ -160,7 +164,7 @@ def collect_data(cfg=None) -> dict:
     persona_dir = getattr(cfg, "persona_dir", None)
     personas = [{"id": p.id, "name": p.name, "title": p.title, "role": p.role, "personality": p.personality,
                  "speaking_style": p.speaking_style, "greeting": p.greeting, "builtin": p.builtin,
-                 "faces": render_all(p.face, 150, p.name)} for p in load_personas(persona_dir).values()]
+                 "faces": render_all(p.face), "color": p.face.get("color", "#5b6ee1")} for p in load_personas(persona_dir).values()]
     report = None
     log_dir = getattr(cfg, "log_dir", None)
     if log_dir and (Path(log_dir) / "diagnostics-latest.json").exists():
@@ -229,8 +233,8 @@ table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;p
 .cat-block{margin:10px 0}.cat-block h4{margin:8px 0 4px;font-size:14px}
 .cbs{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:13px;font-family:var(--mono)}.cbs label{display:flex;gap:4px;align-items:center}
 .faces{display:flex;flex-wrap:wrap;gap:6px}.faces figure{margin:0;text-align:center;font-size:12px;color:var(--muted)}
-.faces svg{width:96px;height:96px}.persona{display:grid;grid-template-columns:150px minmax(0,1fr);gap:14px;align-items:start}
-.persona .big svg{width:150px;height:150px}
+.ascii{font-family:var(--mono);font-size:11px;line-height:1.15;margin:0;padding:6px;background:var(--panel2);border-radius:8px;white-space:pre}
+.persona{display:grid;grid-template-columns:170px minmax(0,1fr);gap:14px;align-items:start}.persona .big .ascii{font-size:15px}
 @media (max-width:820px){.layout{grid-template-columns:minmax(0,1fr)}nav.side{position:static;height:auto;display:flex;flex-wrap:wrap;gap:4px;border-right:0;border-bottom:1px solid var(--line)}
 nav.side .logo,nav.side .ver{width:100%}main{padding:16px}.persona{grid-template-columns:minmax(0,1fr)}}
 .steps{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.steps span{background:var(--panel2);border-radius:8px;padding:4px 10px;font-size:13.5px}
@@ -325,14 +329,14 @@ nav.side .logo,nav.side .ver{width:100%}main{padding:16px}.persona{grid-template
 
 <section id="personas"><h2>Personas &amp; faces</h2>
   <p class="lead">A persona is a council member with a name, role, personality, speaking style, and a procedurally drawn face
-  with seven expressions. The GUI switches expressions live: thinking while they work, speaking when they answer,
-  happy or concerned when the vote is in.</p>
+  drawn in plain ASCII text (about 2 KB per persona) with seven expressions. The GUI animates them live:
+  eyes dart and thought dots grow while they deliberate, the mouth moves while they speak, and they blink when idle.</p>
   <div id="pgallery" class="grid"></div>
   <h3>Make your own</h3>
   <p>Use the GUI's Personas tab (live face editor), or drop a JSON file in <code>./personas/</code>:</p>
   <pre class="cmd" id="pjson"></pre>
-  <p style="font-size:14px">Set <code>"image"</code> to a picture file in the persona folder (or an https URL) to use a portrait instead of the drawn face.
-  That's the groundwork for generated portraits or animated avatars later.</p></section>
+  <p style="font-size:14px">Every face part comes from a fixed menu (hair, head shape, eyes, nose, mouth, glasses, beard, earrings, freckles, colour),
+  so a hand-edited file can't inject anything into the page or terminal.</p></section>
 
 <section id="safety"><h2>Safety centre</h2>
   <p class="lead">Defence in depth. Each layer catches what the one before misses, and fire drills prove they hold.</p>
@@ -445,6 +449,13 @@ function summary() {
 }
 $("#pbase").onchange = loadBase; $("#pctx").onchange = summary; loadBase();
 
+// ASCII face: a <pre> whose frames cycle (speaking/thinking) via one shared ticker
+const animated = [];
+function face(p, ex) { const fr = p.faces[ex] || p.faces.neutral; const pre = el("pre", { class: "ascii", text: fr[0], style: `color:${p.color}` });
+  if (fr.length > 1) animated.push([pre, fr]); return pre; }
+if (!matchMedia("(prefers-reduced-motion: reduce)").matches) { let t = 0; setInterval(() => { t++;
+  for (let i = animated.length - 1; i >= 0; i--) { const [pre, fr] = animated[i]; if (!pre.isConnected) { animated.splice(i, 1); continue; } pre.textContent = fr[t % fr.length]; } }, 260); }
+
 // council designer
 const members = [];
 const cpick = {};
@@ -455,9 +466,9 @@ $("#cproto").value = "debate";
 $("#cadd").onclick = () => { const role = $("#crole").value; let i = 1; while (members.some((m) => m.name === `${role}${i}`)) i++; members.push({ name: `${role}${i}`, role }); renderCouncil(); };
 function renderCouncil() {
   const box = $("#cmembers"); box.replaceChildren();
-  for (const p of D.personas) { const f = el("figure", { style: `cursor:pointer;opacity:${cpick[p.id] ? 1 : .35}`, title: "click to toggle", html: p.faces[cpick[p.id] ? "happy" : "neutral"] });
+  for (const p of D.personas) { const f = el("figure", { style: `cursor:pointer;opacity:${cpick[p.id] ? 1 : .35}`, title: "click to toggle" }, face(p, cpick[p.id] ? "happy" : "neutral"));
     f.append(el("figcaption", { text: `${p.name} (${p.role})` })); f.onclick = () => { cpick[p.id] = !cpick[p.id]; renderCouncil(); }; box.append(f); }
-  for (const m of members) { const f = el("figure", { style: "cursor:pointer" }, el("div", { text: "👤", style: "font-size:56px;line-height:96px;width:96px" }), el("figcaption", { text: `${m.name} ✕` }));
+  for (const m of members) { const f = el("figure", { style: "cursor:pointer" }, el("pre", { class: "ascii", text: "\n\n    ( role )\n\n\n\n" }), el("figcaption", { text: `${m.name} ✕` }));
     f.onclick = () => { members.splice(members.indexOf(m), 1); renderCouncil(); }; box.append(f); }
   const all = [...D.personas.filter((p) => cpick[p.id]).map((p) => ({ name: p.id, role: p.role })), ...members];
   const prev = $("#cchair").value; $("#cchair").replaceChildren(el("option", { value: "", text: "automatic" }), ...all.map((m) => el("option", { value: m.name, text: m.name })));
@@ -485,18 +496,18 @@ for (const [k, p] of Object.entries(D.protocols)) $("#protos").append(el("div", 
   el("p", { text: `Best for ${p.best}. Model contributions: ${p.calls} (N members, R rounds).` })));
 $("#roles").append(row(["Role", "Persona (what it cares about)", "Default tools"], true), ...D.roles.map((r) => row([r.title, r.persona, r.tools])));
 
-// personas
+// personas (ASCII frames; animated ones cycle on a timer)
 for (const p of D.personas) {
-  const big = el("div", { class: "big", html: p.faces.neutral });
-  const strip = el("div", { class: "faces" }, ...D.expressions.map((ex) => { const f = el("figure", { style: "cursor:pointer", html: p.faces[ex] });
-    f.append(el("figcaption", { text: ex })); f.onclick = () => big.innerHTML = p.faces[ex]; return f; }));
+  const big = el("div", { class: "big" }, face(p, "neutral"));
+  const strip = el("div", { class: "faces" }, ...D.expressions.map((ex) => { const f = el("figure", { style: "cursor:pointer" }, face(p, ex));
+    f.append(el("figcaption", { text: ex })); f.onclick = () => big.replaceChildren(face(p, ex)); return f; }));
   $("#pgallery").append(el("div", { class: "card persona" }, big, el("div", {}, el("h3", { text: `${p.name} — ${p.title}`, style: "margin-top:0" }),
     el("p", { text: p.personality }), el("p", { class: "lead", text: `Style: ${p.speaking_style}` }), p.greeting ? el("p", { text: `“${p.greeting}”` }) : null, strip)));
 }
 $("#pjson").textContent = JSON.stringify({ id: "atlas", name: "Atlas", role: "engineer", title: "The Builder",
   personality: "Pragmatic and hands-on; prototypes before debating.", speaking_style: "short sentences, concrete steps",
   greeting: "Show me the constraints and I'll show you a plan.", backend: "local:llama3.1:8b", weight: 1.0,
-  face: { skin: "#b97a4f", hair: "#1f1a17", hair_style: "short", eyes: "#4a3b2c", shape: "square", accent: "#d6a12f", glasses: true } }, null, 2);
+  face: { hair: "mohawk", shape: "square", eyes: "@", glasses: true, nose: "L", mouth: "default", beard: false, earrings: false, freckles: false, color: "#d6a12f" } }, null, 2);
 
 // safety
 const LAYERS = [["Workspace fence", "Paths can't leave the workspace: .., absolute paths and symlinks are refused. / and home can't be the workspace."],
@@ -507,7 +518,14 @@ const LAYERS = [["Workspace fence", "Paths can't leave the workspace: .., absolu
   ["Git hardening", "A repository's own config can't make git run programs (fsmonitor, hooks, external diff, pagers…)."],
   ["Loop guards", "Cut-off tool calls never run, repeated identical calls are refused, and Stop rolls back cleanly."],
   ["Secret redaction", "API keys, tokens and private keys are scrubbed from logs, transcripts and the GUI feed."],
-  ["Data integrity", "Atomic writes and file locks; a corrupt memory file is preserved, never wiped."]];
+  ["Data integrity", "Atomic writes and file locks; a corrupt memory file is preserved, never wiped."],
+  ["Kernel sandbox", "Commands run in bubblewrap (Linux) or sandbox-exec (macOS): the system is read-only, your home folder is invisible, only the workspace is writable."],
+  ["Kernel limits", "CPU time, memory, file size and open files are capped by the OS for every command and its children."],
+  ["Protected paths", "The OS, boot/firmware/devices, your keys and shell configs, and the agent's own code can't be modified or used as a workspace."],
+  ["Undo", "Every overwrite, edit, move and delete is backed up first; deletes go to a trash can. Restore from the Safety tab or restore_backup."],
+  ["Disk guard", "Writes and commands are refused when free space would drop below AGENT_MIN_FREE_MB (or 2% of the disk)."],
+  ["Safe mode", "AGENT_SAFE_MODE=1 gives the agent read-only tools only: nothing can be written or executed."],
+  ["Audit & integrity", "Every write/execute call is logged to audit.jsonl; a SHA-256 manifest detects changed or tampered package files."]];
 for (const [t, d] of LAYERS) $("#layers").append(el("div", { class: "card" }, el("b", { text: t }), el("p", { text: d, style: "margin:6px 0 0;font-size:14px" })));
 const rep = D.report ? Object.fromEntries(D.report.drills.map((d) => [d.key, d])) : null;
 if (D.report) $("#report").append(el("p", { html: "" }, el("b", { text: `Last run ${D.report.time}: ${D.report.passed}/${D.report.total} passed` }),

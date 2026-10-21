@@ -1,7 +1,11 @@
 """[TOOLS / files] Read, write, edit, search and manage files. Sandboxed to the workspace.
 
 Tools: read_file, write_file, append_file, edit_file, list_dir, tree, find_files,
-       search_text, file_info, make_dir, copy_path, move_path, delete_path, diff_files
+       search_text, file_info, make_dir, copy_path, move_path, delete_path, diff_files,
+       list_backups, restore_backup
+
+Every tool that changes something goes through wpath() (workspace only, never
+.agent/, enough free disk) and backs the original up first (security/backup.py).
 """
 from __future__ import annotations
 
@@ -12,11 +16,13 @@ import itertools
 import os
 import shutil
 
+from ...security import backup
 from ...security.guards import (
     compile_regex,
     read_text_limited,
     resolve_in_workspace,
     run_regex_isolated,
+    writable_path,
 )
 from ..registry import S, ToolContext, ToolError, ToolRegistry
 
@@ -49,6 +55,11 @@ def _human(n: float) -> str:
     return f"{n:.1f} TB"
 
 
+def wpath(ctx: ToolContext, path: str):
+    """Path for a tool that CHANGES files: inside the workspace, not .agent/, disk has room."""
+    return writable_path(ctx.workspace, path, ctx.min_free_mb)
+
+
 def register(reg: ToolRegistry) -> None:
     t = reg.group(CATEGORY)
 
@@ -78,9 +89,11 @@ def register(reg: ToolRegistry) -> None:
     @t("write_file", "Create or overwrite a text file in the workspace. Creates parent folders.",
        S(path="string", content="string"), risk="write")
     def write_file(ctx: ToolContext, path: str, content: str):
-        p = resolve_in_workspace(ctx.workspace, path)
-        if p.exists() and not ctx.approver("write_file", {"path": path}, "overwrite existing file"):
-            raise ToolError("User declined overwriting the existing file.")
+        p = wpath(ctx, path)
+        if p.exists():
+            if not ctx.approver("write_file", {"path": path}, "overwrite existing file (a backup is kept)"):
+                raise ToolError("User declined overwriting the existing file.")
+            backup.snapshot(ctx.workspace, p, "overwrite")
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content)
         return f"Wrote {len(content)} chars to {path}"
@@ -89,7 +102,7 @@ def register(reg: ToolRegistry) -> None:
        "Good for building large files in pieces or keeping a log.",
        S(path="string", content="string"), risk="write")
     def append_file(ctx: ToolContext, path: str, content: str):
-        p = resolve_in_workspace(ctx.workspace, path)
+        p = wpath(ctx, path)
         p.parent.mkdir(parents=True, exist_ok=True)
         with p.open("a") as f:
             f.write(content)
@@ -99,7 +112,7 @@ def register(reg: ToolRegistry) -> None:
        "(unless replace_all is true). Read the file first.",
        S(path="string", old_text="string", new_text="string", replace_all="boolean?"), risk="write")
     def edit_file(ctx: ToolContext, path: str, old_text: str, new_text: str, replace_all: bool = False):
-        p = resolve_in_workspace(ctx.workspace, path)
+        p = wpath(ctx, path)
         if not p.is_file():
             raise ToolError(f"No such file: {path}")
         if not old_text:
@@ -110,6 +123,7 @@ def register(reg: ToolRegistry) -> None:
             raise ToolError("old_text not found. Re-read the file and copy the text exactly.")
         if n > 1 and not replace_all:
             raise ToolError(f"old_text appears {n} times; add more context or set replace_all.")
+        backup.snapshot(ctx.workspace, p, "edit")
         p.write_text(text.replace(old_text, new_text) if replace_all else text.replace(old_text, new_text, 1))
         return f"Edited {path} ({n if replace_all else 1} replacement(s))"
 
@@ -207,14 +221,13 @@ def register(reg: ToolRegistry) -> None:
 
     @t("make_dir", "Create a folder (and any missing parents).", S(path="string"), risk="write")
     def make_dir(ctx: ToolContext, path: str):
-        resolve_in_workspace(ctx.workspace, path).mkdir(parents=True, exist_ok=True)
+        wpath(ctx, path).mkdir(parents=True, exist_ok=True)
         return f"Created {path}/"
 
     @t("copy_path", "Copy a file or folder inside the workspace.",
        S(source="string", destination="string"), risk="write")
     def copy_path(ctx: ToolContext, source: str, destination: str):
-        src = resolve_in_workspace(ctx.workspace, source)
-        dst = resolve_in_workspace(ctx.workspace, destination)
+        src, dst = resolve_in_workspace(ctx.workspace, source), wpath(ctx, destination)
         if not src.exists():
             raise ToolError(f"No such path: {source}")
         if dst.exists():
@@ -226,8 +239,7 @@ def register(reg: ToolRegistry) -> None:
     @t("move_path", "Move or rename a file or folder inside the workspace.",
        S(source="string", destination="string"), risk="write", requires_approval=True)
     def move_path(ctx: ToolContext, source: str, destination: str):
-        src = resolve_in_workspace(ctx.workspace, source)
-        dst = resolve_in_workspace(ctx.workspace, destination)
+        src, dst = wpath(ctx, source), wpath(ctx, destination)
         if not src.exists():
             raise ToolError(f"No such path: {source}")
         if dst.exists():
@@ -236,16 +248,29 @@ def register(reg: ToolRegistry) -> None:
         shutil.move(src, dst)
         return f"Moved {source} -> {destination}"
 
-    @t("delete_path", "Delete a file, or a folder and everything in it.",
+    @t("delete_path", "Delete a file or folder. It goes to the backup trash, so restore_backup can undo it.",
        S(path="string"), risk="write", requires_approval=True)
     def delete_path(ctx: ToolContext, path: str):
-        p = resolve_in_workspace(ctx.workspace, path)
+        p = wpath(ctx, path)
         if p == ctx.workspace.resolve():
             raise ToolError("Refusing to delete the whole workspace.")
         if not p.exists():
             raise ToolError(f"No such path: {path}")
-        shutil.rmtree(p) if p.is_dir() else p.unlink()
-        return f"Deleted {path}"
+        entry = backup.snapshot(ctx.workspace, p, "delete", move=True)
+        return f"Deleted {path} (recoverable: restore_backup id={entry['id'] if entry else '?'})"
+
+    @t("list_backups", "List automatic backups (made before every overwrite, edit and delete), newest first.",
+       S(path="string?|Only backups of paths containing this"))
+    def list_backups(ctx: ToolContext, path: str = ""):
+        rows = backup.list_backups(ctx.workspace, path)[:50]
+        return "\n".join(f"{e['id']}  {e['time']}  {e['action']:<9} {e['path']}  ({_human(e['bytes'])})"
+                         for e in rows) or "No backups yet."
+
+    @t("restore_backup", "Undo a change: put a backed-up file/folder back (what's there now is backed up first).",
+       S(backup_id="string|An id from list_backups"), risk="write", requires_approval=True)
+    def restore_backup(ctx: ToolContext, backup_id: str):
+        wpath(ctx, ".")  # disk-space check before restoring
+        return f"Restored {backup.restore(ctx.workspace, backup_id)}"
 
     @t("diff_files", "Show a unified diff between two text files.",
        S(path_a="string", path_b="string", context="integer?|Context lines, default 3"))

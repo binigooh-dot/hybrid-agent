@@ -12,9 +12,11 @@ import sqlite3
 import statistics
 from collections.abc import Callable
 
+from ...security import backup
 from ...security.guards import read_text_limited, resolve_in_workspace
 from ...security.xmlsafe import safe_xml_parse
 from ..registry import S, ToolContext, ToolError, ToolRegistry
+from .files import wpath
 
 CATEGORY = "data"
 
@@ -177,7 +179,8 @@ def register(reg: ToolRegistry) -> None:
     @t("convert_data", "Convert between CSV and JSON files (a JSON list of objects <-> CSV rows).",
        S(source="string", destination="string|Extension decides the output format"), risk="write")
     def convert_data(ctx: ToolContext, source: str, destination: str):
-        dst = resolve_in_workspace(ctx.workspace, destination)
+        dst = wpath(ctx, destination)
+        backup.snapshot(ctx.workspace, dst, "convert overwrite")
         if source.endswith((".csv", ".tsv")) and destination.endswith(".json"):
             rows = load_rows(ctx, source)
             dst.write_text(json.dumps(rows, indent=2))
@@ -201,8 +204,11 @@ def register(reg: ToolRegistry) -> None:
     def sqlite_query(ctx: ToolContext, path: str, sql: str):
         p = resolve_in_workspace(ctx.workspace, path)
         read_only = re.match(r"^\s*(select|with|pragma|explain)\b", sql, re.I) is not None
-        if not read_only and not ctx.approver("sqlite_query", {"sql": sql}, "modifies the database"):
-            raise ToolError("User declined the write query.")
+        if not read_only:
+            if not ctx.approver("sqlite_query", {"sql": sql}, "modifies the database (a backup is kept)"):
+                raise ToolError("User declined the write query.")
+            p = wpath(ctx, path)
+            backup.snapshot(ctx.workspace, p, "sql write")
         uri = f"file:{p}?mode=ro" if read_only else f"file:{p}?mode=rwc"
         try:
             con = sqlite3.connect(uri, uri=True, timeout=10)

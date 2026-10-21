@@ -9,7 +9,16 @@
   "greeting": "Welcome, everyone. Let's hear each view before we decide anything.",
   "backend": "default",
   "weight": 1.0,
-  "face": {"skin": "#d39b6e", "hair": "#c9c9c9", "hair_style": "bun", "eyes": "#2f5d8a", "shape": "oval",
-           "accent": "#6b5bd6", "background": "#ece9fb", "glasses": true, "beard": false, "earrings": true,
-           "freckles": false, "blush": true, "mouth_style": "default"}
+  "face": {
+    "hair": "bun",
+    "shape": "round",
+    "eyes": "o",
+    "glasses": true,
+    "nose": "^",
+    "mouth": "default",
+    "beard": false,
+    "earrings": true,
+    "freckles": false,
+    "color": "#6b5bd6"
+  }
 }

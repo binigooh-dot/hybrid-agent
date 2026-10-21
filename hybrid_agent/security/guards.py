@@ -7,8 +7,10 @@ go past a bouncer (`check_shell_command`) that turns away the obviously
 destructive ones, and anything risky still needs the user's y/N.
 
 What lives here:
-  validate_workspace   refuse /, home, and system folders as a workspace
+  validate_workspace   refuse /, home, system folders and protected paths as a workspace
   resolve_in_workspace keep every path inside the workspace
+  writable_path        ... and keep file tools out of the agent's own .agent/ data
+  ensure_disk_space    refuse writes when the disk is nearly full (keeps the OS healthy)
   check_shell_command  defence-in-depth blocklist for destructive commands
   safe_regex           refuse regexes that can take exponential time (ReDoS)
   read_text_limited    read a text file without risking memory exhaustion
@@ -50,6 +52,17 @@ def validate_workspace(path: Path) -> Path:
     if p in system or p == p.parent:
         raise ValueError(f"Refusing workspace {p}: that is a system folder. Use a dedicated folder, "
                          "e.g. ./workspace")
+    import tempfile
+
+    from .protected import agent_paths, overlaps, protected_paths
+    tmp = Path(tempfile.gettempdir()).resolve()
+    # Temp folders may sit under a protected system path (macOS: /private/var), so a throwaway
+    # temp workspace skips the SYSTEM/USER checks - but never the agent's own files.
+    in_tmp = p == tmp or tmp in p.parents
+    for q in agent_paths() if in_tmp else protected_paths():
+        if overlaps(p, q):
+            raise ValueError(f"Refusing workspace {p}: it overlaps protected path {q} (system files, "
+                             "your keys/configs, or the agent itself). Use a dedicated folder.")
     return p
 
 
@@ -64,6 +77,34 @@ def resolve_in_workspace(workspace: Path, path: str) -> Path:
         raise ToolError(f"Path '{path}' is outside the workspace ({root}). "
                         "Use a path relative to the workspace.")
     return full
+
+
+def writable_path(workspace: Path, path: str, min_free_mb: int = 0) -> Path:
+    """resolve_in_workspace for tools that CHANGE files: the agent's own data
+    (.agent/ - backups, memory, index) is off-limits, and the disk must have room."""
+    full = resolve_in_workspace(workspace, path)
+    internal = workspace.resolve() / ".agent"
+    if full == internal or internal in full.parents:
+        raise ToolError("The .agent folder holds the agent's backups and memory; file tools can't change it. "
+                        "Use remember/forget or restore_backup instead.")
+    ensure_disk_space(workspace, min_free_mb)
+    return full
+
+
+def ensure_disk_space(path: Path, min_free_mb: int = 1024) -> None:
+    """Refuse to write when free space is below max(min_free_mb, 2% of the disk):
+    a full disk can crash the operating system and corrupt files."""
+    if min_free_mb <= 0:
+        return
+    try:
+        import shutil
+        u = shutil.disk_usage(path if path.exists() else path.parent)
+    except OSError:
+        return
+    floor = max(min_free_mb * 1024 * 1024, int(u.total * 0.02))
+    if u.free < floor:
+        raise ToolError(f"Disk almost full ({u.free / 1e9:.1f} GB free; safety floor {floor / 1e9:.1f} GB). "
+                        "Writing was refused to protect the system. Free some space first.")
 
 
 def read_text_limited(path: Path, limit: int = MAX_TEXT_BYTES) -> str:
@@ -87,6 +128,20 @@ _PATTERNS = [
     (r"\bcrontab\s+-r\b", "deleting all scheduled jobs"),
     (r"\b(del|erase)\s+/[sqf]|\brd\s+/s|\brmdir\s+/s|\bformat\s+[a-z]:|Remove-Item\b.*-Recurse",
      "recursive delete on Windows"),
+    # --- hardware, firmware, kernel and system services
+    (r"\b(modprobe|insmod|rmmod)\b", "loading/unloading kernel modules"),
+    (r"\b(flashrom|fwupdmgr|efibootmgr|nvram|bless|grub-install|update-grub)\b", "firmware / boot loader change"),
+    (r"\bsysctl\s+(-w\b|--write\b|\S+=)", "changing kernel parameters"),
+    (r">\s*/(sys|proc/sys)/|\btee\s+(-a\s+)?/(sys|proc/sys)/", "writing to hardware/kernel interfaces"),
+    (r"\bumount\b|\bmount\s+(-|/dev)|\bswapoff\b|\bhdparm\b|\bsmartctl\s+-s\b|\bwrmsr\b|\bsetpci\b|"
+     r"\bcpufreq-set\b|\bnvidia-smi\s+-(pl|ac|lgc|rgc)\b", "changing disks, power or hardware settings"),
+    (r"\b(systemctl|service)\s+(\S+\s+)?(stop|disable|mask|kill)\b|\blaunchctl\s+(unload|remove|bootout)\b",
+     "stopping or disabling system services"),
+    (r"\b(diskpart|bcdedit|vssadmin|wbadmin)\b|\breg\s+(delete|add)\b|\bwmic\s+shadowcopy",
+     "Windows disk/boot/registry change"),
+    (r"\b(passwd|chpasswd|usermod|userdel|useradd|visudo)\b", "changing user accounts"),
+    (r"\biptables\s+-[FX]\b|\bufw\s+disable\b|\bnetsh\s+advfirewall\s+set\s+\S+\s+state\s+off",
+     "disabling the firewall"),
     (r"\bfind\b.*\s-delete\b", "find -delete"),
     (r"\bchmod\b.*\s-R\b|\bchown\b.*\s-R\b|\bchgrp\b.*\s-R\b|\bchmod\s+-R|\bchown\s+-R",
      "recursive permission change"),
@@ -120,7 +175,7 @@ def _is_recursive_rm(tokens: list[str]) -> list[str] | None:
     return targets if (recursive or os.path.basename(tokens[0]) == "shred") else None
 
 
-def check_shell_command(command: str) -> None:
+def check_shell_command(command: str, workspace: Path | None = None) -> None:
     """Raise ToolError for commands that look destructive beyond the workspace.
 
     Recursive deletes are refused when ANY target is absolute, in the home
@@ -131,6 +186,14 @@ def check_shell_command(command: str) -> None:
         if re.search(pattern, command, re.IGNORECASE):
             raise ToolError(f"Blocked command ({why}). If this is really needed, ask the user to run it "
                             "themselves.")
+    from .protected import protected_targets
+    hits = protected_targets(command, workspace)
+    if hits:
+        raise ToolError(f"Blocked command: it would modify protected path(s) {', '.join(hits)} (system files, "
+                        "your keys/configs, or the agent's own files).")
+    if workspace is not None and re.search(r"(^|[\s/'\"])\.agent\b", command) and \
+            re.search(r"\b(rm|mv|cp|tee|truncate|shred|sed\s+-i|chmod|ln)\b|>", command):
+        raise ToolError("Blocked command: the .agent folder holds backups and memory and can't be changed by commands.")
     for tokens in _segments(command):
         targets = _is_recursive_rm(tokens)
         if targets is None:

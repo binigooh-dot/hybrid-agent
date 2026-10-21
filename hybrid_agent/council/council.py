@@ -245,20 +245,12 @@ class Council:
         for name, spec in self.specs.items():
             backend = build_backend_from_spec(spec.backend, self.cfg, member=name)
             uses_claude = isinstance(backend, RouterBackend)
-            ctx = ToolContext(
-                workspace=self.cfg.workspace,
-                max_output=min(self.cfg.max_tool_output, 12000),
-                shell_timeout=self.cfg.shell_timeout,
-                searxng_url=self.cfg.searxng_url,
-                agent_name=name,
-                blackboard=self.board,
-                local_backend=build_local_backend(self.cfg) if uses_claude else None,
-            )
-            if self.approver:
-                ctx.approver = self.approver
-            if self.ask_user:
-                ctx.ask_user = self.ask_user
-            tools = build_registry(ctx, spec.tool_profile() + ",@council", include_delegate=uses_claude)
+            extra = {k: v for k, v in (("approver", self.approver), ("ask_user", self.ask_user)) if v}
+            ctx = ToolContext.from_config(self.cfg, max_output=min(self.cfg.max_tool_output, 12000),
+                                          agent_name=name, blackboard=self.board, **extra,
+                                          local_backend=build_local_backend(self.cfg) if uses_claude else None)
+            tools = build_registry(ctx, spec.tool_profile() + ",@council", include_delegate=uses_claude,
+                                   safe_mode=self.cfg.safe_mode)
             others = [f"{n} ({self.specs[n].role})" for n in self.specs if n != name]
             agent = Agent(backend, tools, system_prompt=spec.system_prompt(others),
                           max_steps=spec.max_steps or min(self.cfg.max_steps, 12),

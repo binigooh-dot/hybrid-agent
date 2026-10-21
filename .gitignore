@@ -10,3 +10,8 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 *.part
+# release artefacts (scripts/build_release.py)
+dist/
+build/
+*.egg-info/
+hybrid_agent/MANIFEST.sha256

@@ -1,18 +1,29 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "hybrid-agent"
-version = "0.2.0"
-description = "Tool-using agent (78 tools) and council of agents that run on local models with no API key, with optional Claude."
+version = "1.0.0"
+description = "Tool-using agent (80 tools) and a council of persona agents that run on local models with no API key, with optional Claude, a sandbox and a local web GUI."
+readme = "README.md"
 requires-python = ">=3.10"
 dependencies = []
+classifiers = ["Programming Language :: Python :: 3", "Operating System :: OS Independent",
+               "Environment :: Web Environment", "Topic :: Scientific/Engineering :: Artificial Intelligence"]
 
 [project.optional-dependencies]
 claude = ["anthropic>=1.0"]
 
 [project.scripts]
-hybrid-agent = "hybrid_agent.cli:main"
+hybrid-agent = "hybrid_agent.cli.main:main"
 
 [tool.setuptools.packages.find]
 include = ["hybrid_agent*"]
+
+[tool.setuptools.package-data]
+# the GUI's files, built-in personas, and the release integrity manifest (scripts/build_release.py)
+hybrid_agent = ["gui/static/*", "personas/presets/*.json", "MANIFEST.sha256"]
 
 # ---------------------------------------------------------------- code health
 # `ruff check .` and `mypy hybrid_agent` use these settings; see scripts/health_check.py

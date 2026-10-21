@@ -15,16 +15,23 @@ Keep the terminal open; press Ctrl+C to stop.
 
 | Tab | What you can do |
 |---|---|
-| **Council** | Pick members by their faces, choose the chair and protocol, ask a question. Each face reacts live: *thinking* while they work, *speaking* when they answer, then *happy* or *concerned* depending on whether the vote went their way. You get vote bars, the chair's answer and a timeline. |
-| **Chat** | Talk to one agent, optionally as a persona (their face and greeting), and choose the tool profile. Tool activity is shown inline. |
-| **Personas** | Edit or create personas: name, role, personality, speaking style, model, vote weight, and a **live face editor** (colours, hair style, face shape, glasses, beard…) with all seven expressions. |
-| **Tools** | Search and filter all 78 tools by category, risk and profile. |
-| **Safety** | Run the safety fire drills and the setup doctor from the browser. |
+| **Council** | Three numbered steps: ① ask a question (or tap an example), ② tap faces to choose who's in the room (★ marks the chair; "Change chair" rotates it), ③ pick how they decide from four cards (Roundtable, Debate, Vote, Critique). The stage then shows each member's **animated ASCII face**: eyes dart and thought dots grow while they *think*, the mouth moves while they *speak*, and they look *happy* or *concerned* depending on the vote. A conversation-style **Discussion** feed collects every contribution, and the **Decision** card shows the winner, animated vote bars and the chair's answer. |
+| **Chat** | Talk to one agent, optionally as a persona (their face and greeting). Tool use is folded into a "🔧 used N tools" line under each reply; open it for the details. Suggestion chips help you get started. |
+| **Personas** | A **face builder** with menus (hair, head, eyes, nose, mouth), toggles (glasses, beard, earrings, freckles), colour swatches and a live animated preview for all seven expressions, plus name, role, personality, speaking style and (under *Advanced*) model, vote weight and tool profile. |
+| **Tools** | Search and filter all 80 tools by category, risk and profile, with a plain-English risk legend. |
+| **Safety** | Status cards (sandbox, approvals, safe mode, free disk, protected paths, package integrity, undo history), an **Undo history** with one-click **Restore**, the safety fire drills and the setup check. A dot on the tab shows the overall state: green = fully protected, amber = no strict sandbox, red = reduced protection. |
 | **Guide ↗** | The Agent Builder Knowledge Suite (also at `docs/agent_builder_suite.html`). |
 
-When an agent wants a risky tool (shell, Python, delete…), an **Allow / Deny** box appears with the exact
-arguments. No answer within 3 minutes means **Deny**. **Stop** in the top bar halts the current job at the
-next safe point and rolls its history back cleanly.
+If no local model is reachable, a **first-run banner** explains the three steps to get one (or to try the
+demo backend). When an agent wants a risky tool, a dialog shows the risk level, **what exactly will run**
+(the command, code, path or URL), and a countdown bar; focus starts on **Deny**, Esc denies, and no answer in
+3 minutes means **Deny**. **Stop** in the top bar halts the current job at the next safe point.
+
+| Council | Personas |
+|---|---|
+| ![Council](screenshots/1_council.png) | ![Personas](screenshots/3_personas.png) |
+| **Chat** | **Safety** |
+| ![Chat](screenshots/2_chat.png) | ![Safety](screenshots/6_safety.png) |
 
 ## How it's built
 
@@ -62,7 +69,8 @@ A persona is a council member with a character. Built-ins: **Sage** (chair), **V
 {"id": "atlas", "name": "Atlas", "role": "engineer", "title": "The Builder",
  "personality": "Pragmatic and hands-on.", "speaking_style": "short sentences, concrete steps",
  "greeting": "Show me the constraints.", "backend": "local:llama3.1:8b", "weight": 1.0,
- "face": {"skin": "#b97a4f", "hair_style": "short", "glasses": true}, "image": null}
+ "face": {"hair": "mohawk", "shape": "square", "eyes": "@", "nose": "L", "mouth": "default",
+          "glasses": true, "beard": false, "earrings": false, "freckles": false, "color": "#d6a12f"}}
 ```
 
 What the model sees: the **role's** persona (what it cares about), then the **character's** personality
@@ -78,23 +86,41 @@ python -m hybrid_agent council --personas sage,vex,nova -p "..."
 
 ## Faces
 
-Faces are drawn procedurally as SVG (`personas/faces.py`): no image files, no downloads, no AI image service.
+Faces are **ASCII art** (`personas/faces.py`): 7 lines × 16 characters of plain text. No images, no
+downloads, no image model; all seven expressions plus the animation frames for one persona come to about
+2 KB (the old SVG faces were ~14 KB each).
 
-Analogy: a paper-doll kit. The kit (skin, hair, eyes, shirt, backdrop colours; hair style; face shape;
-mouth; glasses, beard, earrings, freckles, blush) is fixed per persona. The **expression** swaps the brows,
-eyes and mouth: `neutral`, `thinking` (eyes up, thought bubble), `speaking` (open mouth, animated),
-`happy`, `concerned`, `surprised`, `skeptical`.
+```
+   /\/\/\/\/          hair       spiky curly wavy bun mohawk flat bald
+  +---------+         head       oval ( | )  round ( ( ) )  square ( [ ] )
+  [  -   -  ]         brows      change with the mood
+o [ [*]-[*] ]o        eyes       o 0 @ * Q .   + glasses, earrings
+  [  . L .  ]         nose       > < ^ L v J   + freckles
+  [   (O)   ]  ))     mouth      default / wide / small; talks in 4 frames
+  \vvvvvvvvv/         chin       or beard
+```
 
-Every colour and option is validated before it's drawn, so a hand-edited persona file can't inject markup.
-The GUI animates blinking and talking with CSS, and turns animation off if your system asks for reduced motion.
+Analogy: a paper-doll kit. Each persona keeps the same kit; an **expression** only swaps the brows, eyes
+and mouth: `neutral`, `thinking`, `speaking`, `happy`, `concerned`, `surprised`, `skeptical`.
+
+| Animation | Frames | What moves |
+|---|---|---|
+| speaking | 4 | mouth opens and closes, sound marks `))` pulse |
+| thinking | 4 | eyes glance left and right, thought dots `. .. ...` grow |
+| idle | 1 + blink | eyes close for a moment every few seconds |
+
+The browser runs **one** shared 230 ms timer for every face on screen, and simply swaps the text of a
+`<pre>`, so there's no measurable CPU cost. Animation switches off when your system asks for reduced motion.
+Every part comes from a fixed menu and faces are written with `textContent`, so a hand-edited persona file
+can't inject anything into the page or the terminal. (Older persona files with an `"image"` field still load;
+the field is ignored.)
 
 ## Groundwork: where to take it next
 
 | Next step | How it plugs in |
 |---|---|
-| **Portraits** (your own art or AI-generated) | Set `"image": "atlas.png"` (a file in `./personas/`). The GUI shows it instead of the drawn face |
-| **Expression-matched portraits** | Extend `image` to a map `{"neutral": "atlas.png", "happy": "atlas-happy.png", ...}`; `setFace()` in `app.js` already switches by expression |
-| **Voices (text-to-speech)** | Add `"voice"` to the persona; on `member_done`, send the text to a local TTS (e.g. Piper) and play it. The *speaking* face already animates while a member talks |
-| **Lip-sync / animated avatars** | Replace the `<svg>` in `.face` with a canvas or Live2D/VRM component that reads the same state events |
+| **More face parts** | Add entries to `HAIR`, `EYES`, `NOSES` or a mouth style in `faces.py`; the GUI menus are built from `/api/meta` automatically |
+| **Voices (text-to-speech)** | Add `"voice"` to the persona; on `member_done`, send the text to a local TTS (e.g. Piper) and play it. The *speaking* animation already runs while a member talks |
+| **Faces in the terminal** | `render_face(face, "speaking", frame)` returns plain text - print it from the CLI with ANSI colour |
 | **Per-persona memory** | Prefix memory keys with the persona id, or give each persona its own memory file |
 | **Streaming text** | Stream tokens from the local backend and publish them as events, so speech bubbles fill in live |

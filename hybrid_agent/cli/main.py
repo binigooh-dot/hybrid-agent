@@ -86,17 +86,11 @@ def resolve_profile(cfg: Config, using_claude: bool) -> str:
 def build_agent(cfg: Config, verbose: bool = True) -> Agent:
     backend = build_backend(cfg)
     using_claude = isinstance(backend, RouterBackend)
-    ctx = ToolContext(
-        workspace=cfg.workspace,
-        approver=make_approver(cfg.auto_approve),
-        ask_user=ask_user,
-        max_output=cfg.max_tool_output,
-        shell_timeout=cfg.shell_timeout,
-        searxng_url=cfg.searxng_url,
-        local_backend=build_local_backend(cfg) if using_claude else None,
-    )
+    ctx = ToolContext.from_config(cfg, approver=make_approver(cfg.auto_approve), ask_user=ask_user,
+                                  local_backend=build_local_backend(cfg) if using_claude else None)
     cfg.workspace.mkdir(parents=True, exist_ok=True)
-    tools = build_registry(ctx, resolve_profile(cfg, using_claude), include_delegate=using_claude)
+    tools = build_registry(ctx, resolve_profile(cfg, using_claude), include_delegate=using_claude,
+                           safe_mode=cfg.safe_mode)
     return Agent(backend, tools, max_steps=cfg.max_steps, log_dir=cfg.log_dir,
                  on_event=print_event if verbose else None, context_chars=cfg.context_chars())
 

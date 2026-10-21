@@ -4,6 +4,112 @@ A log of what was built, the decisions behind it, and how it was checked. Newest
 
 ---
 
+## Session 4: hard safety, ASCII faces, GUI refinement, release 1.0.0
+
+**Request:** hard safety features protecting the user's system and data, and the files the hardware and the
+agents need; optimise and trim the code without losing integrity; replace the persona faces with cheap,
+recognisable ASCII faces with expressions and animations; refine the GUI; test it; package and ship.
+
+### 1. Hard safety (new: `security/sandbox.py`, `protected.py`, `backup.py`, `audit.py`)
+
+Before this session the defences were *policy* (the agent's own code refusing things). Now the **operating
+system** enforces them too, so a cleverly-written command can't talk its way past.
+
+| Layer | What it does | Verified |
+|---|---|---|
+| Kernel sandbox | bubblewrap / sandbox-exec: system read-only, home replaced by an empty folder, private `/tmp`, only the workspace writable, `.agent/` read-only | live: `touch /etc/x` fails, `ls ~` empty, a fake API key isn't visible |
+| Kernel limits | CPU, memory, file size, open files, no core dumps, for the command and every child. Set by a tiny exec launcher, not `preexec_fn` (which can deadlock with threads) | 600 MB allocation refused; file capped at 1 MB |
+| Env scrubbing | secrets, `LD_PRELOAD`, `GIT_SSH_COMMAND`, the whole `GIT_CONFIG_*` family… | drill + unit test |
+| Protected paths | OS/boot/firmware/devices, keys and shell configs, the agent's own package | 30+ commands refused, no false positives |
+| Hardware guard | firmware/BIOS writes, partitioning, kernel modules, sysctl, services, accounts, firewall | blocklist drill |
+| Undo | every overwrite/edit/move/delete backed up first; delete = trash; `list_backups` / `restore_backup` tools; GUI Restore button | drill + unit tests + browser test |
+| Disk guard | refuse writes below `AGENT_MIN_FREE_MB` or 2 % of the disk | drill |
+| Safe mode | `AGENT_SAFE_MODE=1` = read/network tools only | drill + unit test |
+| Audit log | every write/execute call, redacted, to `logs/audit.jsonl` | drill + unit test |
+| Integrity manifest | SHA-256 of every package file in a release; doctor/diagnose/GUI flag changes | drill + unit test; verified on the installed wheel |
+
+Problems found and fixed along the way:
+- git broke inside the sandbox because the secret filter dropped `GIT_CONFIG_KEY_0` but not `GIT_CONFIG_COUNT`.
+  The whole family is now dropped, which also closes an fsmonitor injection route.
+- git commit failed because this machine signs commits through a helper the sandbox hides. The agent now
+  commits with signing off: it must never sign as you.
+- **Found while shipping:** temp folders were exempt from the protected-path check (needed on macOS, where
+  temp lives under `/private/var`), but that also exempted the agent's own files. An agent installed under a
+  temp folder could therefore be given its own code as a workspace. Now only the system paths are exempt; a
+  regression test was added.
+
+**Drills: 29 → 39, all passing.**
+
+### 2. ASCII faces with animation
+
+`personas/faces.py` was rewritten: 7 lines × 16 columns of text, built from fixed menus (7 hair, 3 head
+shapes, 6 eyes, 6 noses, 3 mouths, glasses/beard/earrings/freckles, 8 colours). There are 7 expressions;
+*speaking* and *thinking* have 4 frames each, and idle faces blink. The browser runs one shared 230 ms timer
+for all faces and only swaps text, so the CPU cost is negligible.
+
+| | Before (SVG) | After (ASCII) |
+|---|---|---|
+| `faces.py` | 230 lines | 128 lines |
+| Face payload, 3 personas | 41,785 bytes | 5,777 bytes (−86 %) |
+| Rendering | `innerHTML` of sanitised SVG | `textContent` only, so nothing can be injected |
+| Animation | CSS on SVG parts | real frames: mouth, darting eyes, thought dots, blink |
+
+The `image` field (portrait groundwork) was removed; old persona files that still contain it load fine.
+
+### 3. GUI refinement
+
+- **Council:** three numbered steps (ask / who's in the room / how they decide) with example questions,
+  tap-to-pick faces, a ★ chair and protocol cards. The stage has animated faces with a status line and vote
+  badge; a conversation-style Discussion feed; and a Decision card with animated vote bars.
+- **Chat:** tool use folded into "🔧 used N tools"; suggestion chips; persona face in the header.
+  - Fixed a race: a fast reply could arrive before the "thinking" bubble existed, leaving it behind.
+- **Personas:** a face builder (menus, toggles, swatches, live animated preview); the id is suggested from
+  the name; rarely used fields are under *Advanced*.
+- **Safety tab:** status cards, an undo history with Restore, drills and setup check. A coloured dot on
+  the tab shows the overall state.
+- **Approval dialog:** risk badge, *exactly* what will run shown on its own, full details folded away,
+  focus on Deny, and a countdown bar.
+- **First-run banner** when no local model is reachable.
+- **Server:** routes are declared with a `@route` decorator instead of if-chains, plus `/api/safety`,
+  `/api/restore`, a 30 s meta cache, and the portrait route removed.
+
+### 4. Optimisation and trimming
+
+| | Before | After |
+|---|---|---|
+| Build a registry | 0.31 ms | 0.005 ms (tool catalogue cached) |
+| Build all 8 profiles | 2.7 ms | 0.24 ms |
+| `faces.py` / `server.py` | 230 / 449 lines | 128 / 424 |
+
+Total Python grew from 7,230 to 8,262 lines. The ~400 lines of new security modules and ~170 lines of new
+drills outweigh the trimming; the GUI files grew for the new features (steps, builder, safety centre).
+
+### 5. Verification
+
+- 133 tests, all passing, including a new `tests/test_security.py` (sandbox, protected paths, backups,
+  audit, manifest, safe mode) and updated GUI tests (`/api/face`, `/api/safety`, `/api/restore`).
+- `health_check.py`: 10/10 checks pass. They are tests, ruff, mypy, bandit, vulture, vermin, radon,
+  drills, coverage (80 %) and the real-browser test.
+- The browser test now also checks that the faces really animate and that Restore really restores a file.
+
+### 6. Release 1.0.0
+
+`scripts/build_release.py` does four things:
+1. writes the integrity manifest;
+2. builds the wheel and sdist into `dist/`;
+3. writes `SHA256SUMS`;
+4. removes the manifest from the source tree again.
+
+The wheel was installed into a clean venv and tested there:
+- `hybrid-agent -p demo`, `council` and `diagnose` all work.
+- The manifest verifies (71 files).
+- The GUI serves `/` and `/guide` and refuses requests without the token.
+
+**Found by this test:** the `hybrid-agent` console command crashed on start, because the entry point named
+the `cli.main` module instead of the `main()` function. Fixed.
+
+---
+
 ## Session 3: GUI, personas with faces, knowledge suite, full diagnostic, cleanup, upscale
 
 **Request:** a browsable HTML guide ("Agent Builder knowledge suite"); groundwork for a GUI with a council

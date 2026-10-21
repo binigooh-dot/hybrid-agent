@@ -25,7 +25,7 @@ from pathlib import Path
 
 _LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 _DESTRUCTIVE = re.compile(r"\brm\b|\bmkfs|\bdd\b|shutdown|reboot|\bkill\b|chmod\s+-R|chown\s+-R|"
-                          r"\bfind\b.*-delete|>\s*/dev/|\bformat\b|Remove-Item|\bdel\b\s+/", re.I)
+                          r"\bfind\b.*-delete|>\s*/dev/(sd|hd|nvme|disk|mmcblk)|\bformat\b|Remove-Item|\bdel\b\s+/", re.I)
 
 
 class TripwireTriggered(RuntimeError):

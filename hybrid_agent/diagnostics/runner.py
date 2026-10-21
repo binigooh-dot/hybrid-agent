@@ -18,7 +18,7 @@ from .drills import DRILLS
 from .harness import NetworkTripwire, ProcessTripwire, Sandbox
 from .integrity import CHECKS
 
-SLOW = {"exec.output_flood": 90, "fs.huge_file": 60, "exec.redos": 40}
+SLOW = {"exec.output_flood": 90, "fs.huge_file": 60, "exec.redos": 40, "hard.kernel_limits": 60}
 
 
 @dataclass

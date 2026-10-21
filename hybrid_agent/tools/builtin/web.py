@@ -20,7 +20,6 @@ import urllib.parse
 import urllib.request
 from html.parser import HTMLParser
 
-from ...security.guards import resolve_in_workspace
 from ...security.netguard import check_url, opener
 from ..registry import S, ToolContext, ToolError, ToolRegistry
 
@@ -102,13 +101,18 @@ def http_get(url: str, timeout: int = 30, headers: dict | None = None, max_bytes
         raise ToolError(f"Could not fetch {url}: {getattr(e, 'reason', e)}") from None
 
 
-def http_get_text(url: str, **kw) -> tuple[str, str]:
-    ctype, raw = http_get(url, **kw)
+def decode(ctype: str, raw: bytes) -> str:
+    """Bytes -> text using the server's charset (falls back to UTF-8)."""
     m = re.search(r"charset=([\w-]+)", ctype)
     try:
-        return ctype, raw.decode(m.group(1) if m else "utf-8", errors="replace")
+        return raw.decode(m.group(1) if m else "utf-8", errors="replace")
     except LookupError:  # unknown charset name from the server
-        return ctype, raw.decode("utf-8", errors="replace")
+        return raw.decode("utf-8", errors="replace")
+
+
+def http_get_text(url: str, **kw) -> tuple[str, str]:
+    ctype, raw = http_get(url, **kw)
+    return ctype, decode(ctype, raw)
 
 
 def http_get_json(url: str, **kw):
@@ -132,13 +136,7 @@ def register(reg: ToolRegistry) -> None:
         ctype, raw = http_get(url, policy=policy_for(ctx))
         if any(ctype.startswith(b) for b in _BINARY_TYPES):
             return f"{url} is binary ({ctype}, {len(raw)} bytes). Use download_file to save it."
-        _, body = ctype, raw.decode("utf-8", errors="replace")
-        m = re.search(r"charset=([\w-]+)", ctype)
-        if m:
-            try:
-                body = raw.decode(m.group(1), errors="replace")
-            except LookupError:
-                pass
+        body = decode(ctype, raw)
         text = html_to_text(body) if "html" in ctype or body.lstrip().startswith("<") else body
         return text + ("\n...[page truncated at 2 MB]" if len(raw) >= MAX_BYTES else "")
 
@@ -190,10 +188,13 @@ def register(reg: ToolRegistry) -> None:
     @t("download_file", "Download a file from a URL into the workspace (max 50 MB).",
        S(url="string", path="string|Where to save it in the workspace"), requires_approval=True)
     def download_file(ctx: ToolContext, url: str, path: str):
-        dest = resolve_in_workspace(ctx.workspace, path)
+        from ...security import backup
+        from .files import wpath
+        dest = wpath(ctx, path)
         ctype, raw = http_get(url, timeout=120, max_bytes=MAX_DOWNLOAD_BYTES, policy=policy_for(ctx),
                               strict_size=True)
         dest.parent.mkdir(parents=True, exist_ok=True)
+        backup.snapshot(ctx.workspace, dest, "download overwrite")
         tmp = dest.with_name(dest.name + ".part")
         tmp.write_bytes(raw)
         tmp.replace(dest)

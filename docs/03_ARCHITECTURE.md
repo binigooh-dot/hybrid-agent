@@ -9,13 +9,13 @@ Analogy: a building. Each floor uses only the floors below it.
  │ CLI / GUI     cli/ (main, doctor) · gui/ (server, jobs, guide, static)│  you
  ├──────────────────────────────────────────────────────────────────────┤
  │ COUNCIL       council/ (roles, protocols, ballots, board)            │  many agents
- │   + PERSONAS  personas/ (characters + procedural SVG faces)          │
+ │   + PERSONAS  personas/ (characters + animated ASCII faces)          │
  ├──────────────────────────────────────────────────────────────────────┤
  │ CORE          core/agent.py - the think → act → observe loop         │  one agent
  ├────────────────────────────────┬─────────────────────────────────────┤
  │ BACKENDS (the brain)           │ TOOLS (the hands)                   │
  │ local · claude · router ·      │ registry · profiles ·               │
- │ scripted/canned                │ builtin/ (15 modules, 78 tools)     │
+ │ scripted/canned                │ builtin/ (15 modules, 80 tools)     │
  ├────────────────────────────────┴─────────────────────────────────────┤
  │ SECURITY      security/ (guards, netguard, redact, xmlsafe, regex)    │  the rules every
  │ CORE basics   core/ (messages, config, errors)                       │  layer obeys
@@ -95,7 +95,7 @@ The loop stops when the model replies **without** tool calls, or after `max_step
 | **All protections in `security/`** | One place to read, audit and test what keeps your computer safe. |
 | **History trimming only for local backends** (`Backend.allows_history_trim`) | Small contexts overflow; Claude's API requires an unedited history, so Claude conversations are never trimmed. |
 | **GUI is stdlib + vanilla JS, no CDN** | Works offline; nothing to install; a strict CSP is possible. |
-| **Faces are generated SVG** | No image assets or image models needed; every value is validated, so it's safe to inline. |
+| **Faces are ASCII text** | ~2 KB per persona with every expression and animation frame; parts come from fixed menus and are rendered as text, so nothing can be injected. |
 | **Council members are ordinary `Agent`s** | Everything a single agent can do, a member can do; the council only adds orchestration. |
 
 ## Where the state lives
