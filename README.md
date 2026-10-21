@@ -1,46 +1,55 @@
-# Hybrid Agent — Claude + a local model
+# Hybrid Agent: Claude + local models, 78 tools, council of agents
 
-A tool-using AI agent that **runs entirely on your own machine with no API key**
-using a local model (Ollama, llama.cpp, LM Studio…). If you add an Anthropic key,
-it uses **Claude** as its main model and falls back to the local model when Claude is unreachable.
-Claude can also hand simple jobs to the local model for free.
+A tool-using AI agent that **runs entirely on your own machine with no API key** using a local
+model (Ollama, llama.cpp, LM Studio…). If you add an Anthropic key, it uses **Claude** as its main
+model and falls back to the local model when Claude is unreachable. Several agents can also sit
+as a **council** and deliberate together.
 
-- **No dependencies needed for local mode.** Everything uses Python's standard library.
-- **16 built-in tools**: files, shell, Python, web fetch/search, memory, planning, calculator, clock, delegation.
-- **Safety:** file tools stay inside a sandboxed workspace, dangerous shell commands are blocked, and risky tools ask y/N first.
-- **Tested offline:** 20 tests, no model or network needed.
+- **78 built-in tools in 16 categories**: files, shell, code/git, data (CSV/JSON/SQLite/XML), text,
+  maths, time, web, network, knowledge (Wikipedia, arXiv, weather, dictionary, RSS), system,
+  archives, memory, local document search, planning, and a council blackboard. **None needs an API key.**
+- **Tool profiles** give each agent only the tools it needs (7–23), so small local models aren't overwhelmed.
+- **Council of agents** with roles, mixed models, a shared blackboard, and four protocols (roundtable, debate, vote, critique).
+- **No dependencies** in local mode, which uses only Python's standard library. `anthropic` is needed only for Claude.
+- **Safety:** a workspace sandbox, a blocklist for destructive commands, approval prompts, and risk labels on every tool.
+- **87 offline tests** need no model, key or internet.
 
 ```
-            ┌────────────── you ──────────────┐
-            ▼                                 ▲
-   ┌─────────────────┐   tool calls   ┌──────────────┐
-   │   Agent loop    │ ─────────────► │ Tool registry│──► files / shell / web / memory …
-   │   (agent.py)    │ ◄───────────── │              │
-   └────────┬────────┘    results     └──────────────┘
-            │ chat()
-   ┌────────▼────────┐
-   │     Router      │── Claude (optional, needs key)
-   │                 │── Local model (mandatory, no key)  ◄── fallback
-   └─────────────────┘
+                 ┌───────────────── you ─────────────────┐
+                 ▼                                       ▼
+        ┌─────────────────┐                     ┌──────────────────┐
+        │   Agent loop    │◄── one per member ──│     Council      │── blackboard
+        └───┬─────────┬───┘                     │ roles · protocols│
+   chat()   │         │ tool calls              └──────────────────┘
+   ┌────────▼───┐ ┌───▼──────────────────────────────────────────┐
+   │  Router    │ │ Tool registry ─ profile ─► 78 tools / 16 cats │
+   │ Claude ────┼─┤ validate → approve → safety → run → truncate  │
+   │ ↓ fallback │ └───────────────────────────────────────────────┘
+   │ Local model│  ← the required piece: needs no key
+   └────────────┘
 ```
 
 ## Quick start (no API key)
 
 ```bash
 # 1. Install Ollama (https://ollama.com/download), then:
-ollama serve &                 # starts the local model server on :11434
-ollama pull qwen2.5:7b         # ~4.7 GB; see docs/LOCAL_MODEL_SETUP.md for smaller/larger options
+ollama serve &
+ollama pull qwen2.5:7b                 # ~4.7 GB; see docs/02 for other sizes
 
-# 2. Check that everything is in place
+# 2. Check the setup
 python3 -m hybrid_agent doctor
 
-# 3. Chat
+# 3. Chat with one agent
 python3 -m hybrid_agent --backend local
+
+# 4. Ask a council
+python3 -m hybrid_agent council -p "Should I learn Rust or Go first?" --protocol debate
 ```
 
-To test the agent loop before you download a model, run the canned demo:
+Try it before downloading any model:
 ```bash
-python3 -m hybrid_agent --backend scripted -y -p "demo"
+python3 -m hybrid_agent --backend scripted -y -p demo
+python3 -m hybrid_agent council --backend scripted -p "test question" --protocol vote
 ```
 
 ## Adding Claude (optional)
@@ -48,8 +57,11 @@ python3 -m hybrid_agent --backend scripted -y -p "demo"
 ```bash
 pip install anthropic
 export ANTHROPIC_API_KEY=sk-ant-...
-python3 -m hybrid_agent            # backend "auto" now picks Claude, local model as fallback
+python3 -m hybrid_agent             # "auto" picks Claude, with the local model as fallback
 ```
+
+With Claude as the main model, the agent gets the `full` tool profile plus `delegate_to_local`,
+which hands simple jobs to the free local model.
 
 ## Commands
 
@@ -57,42 +69,48 @@ python3 -m hybrid_agent            # backend "auto" now picks Claude, local mode
 |---|---|
 | `python3 -m hybrid_agent` | Interactive chat (`/help`, `/tools`, `/reset`, `/usage`, `/exit`) |
 | `python3 -m hybrid_agent -p "..."` | One-shot prompt |
+| `python3 -m hybrid_agent council -p "..."` | Council deliberation (`--protocol`, `--rounds`, `--options`, `--council-config`, `--workers`) |
+| `python3 -m hybrid_agent tools` | All tools, grouped by category, with risk labels |
 | `python3 -m hybrid_agent doctor` | Readiness check (required vs optional) |
-| `python3 -m hybrid_agent tools` | List the tools |
-| `--backend auto\|claude\|local\|scripted` | Choose the model |
+| `--backend auto\|claude\|local\|scripted` | Choose the model (`scripted` = offline demo / council dry run) |
+| `--tools PROFILE` | `minimal`, `core`, `research`, `coding`, `data`, `readonly`, `readonly_all`, `full`, or e.g. `core,+weather` |
 | `--model llama3.1:8b` | Choose the local model |
 | `--workspace DIR` | The sandbox folder the agent works in (default `./workspace`) |
-| `-y` | Auto-approve risky tools (shell, python, overwrites) |
-| `python3 -m unittest discover -s tests -v` | Run the tests |
+| `-y` | Auto-approve risky tools |
+| `python3 -m unittest discover -s tests -t .` | Run the tests |
 
-Settings are read from environment variables or a `.env` file. See [`.env.example`](.env.example).
+Settings come from environment variables or `.env`; see [`.env.example`](.env.example).
+
+## Project layout
+
+```
+hybrid-agent/
+├── hybrid_agent/
+│   ├── core/        [CORE]      agent loop, messages, config, safety, errors
+│   ├── backends/    [BACKENDS]  local (Ollama/OpenAI-compatible), claude, router, scripted
+│   ├── tools/       [TOOLS]     registry, profiles
+│   │   └── builtin/             15 tool modules (files, shell, code, data, text, math_time,
+│   │                            web, network, knowledge, system, archives, memory,
+│   │                            documents, agent_ops, council_board)
+│   ├── council/     [COUNCIL]   blackboard, roles, member, ballots, protocols, council
+│   └── cli/         [CLI]       main, doctor
+├── tests/           [TESTS]     one file per area (87 tests, all offline)
+├── examples/        [EXAMPLE]   council configs, custom tool, council from Python
+├── scripts/         [SCRIPTS]   regenerate the tool reference and the file map
+├── docs/            [DOCS]      numbered guides (see below)
+└── NOTES.md                     build log: what was done, why, and what was verified
+```
+
+Every Python file starts with a `[LAYER / name]` label. [docs/FILE_MAP.md](docs/FILE_MAP.md) lists them all.
 
 ## Documentation
 
-| File | Contents |
+| Doc | Contents |
 |---|---|
-| [NOTES.md](NOTES.md) | Build log: what was done, why, and what was verified |
-| [docs/OFFLINE_REQUIREMENTS.md](docs/OFFLINE_REQUIREMENTS.md) | **Everything the agent needs to run without an API key** |
-| [docs/LOCAL_MODEL_SETUP.md](docs/LOCAL_MODEL_SETUP.md) | Installing Ollama / llama.cpp / LM Studio; choosing a model |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the pieces fit, with diagrams |
-| [docs/TOOLS.md](docs/TOOLS.md) | Reference for each tool, and how to add your own |
-
-## Using it as a library
-
-```python
-from pathlib import Path
-from hybrid_agent import Agent
-from hybrid_agent.backends import LocalBackend
-from hybrid_agent.tools import ToolContext, build_default_registry
-
-ctx = ToolContext(workspace=Path("workspace"), approver=lambda *a: True)
-tools = build_default_registry(ctx)
-
-@tools.tool("shout", "Upper-case some text", {
-    "type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]})
-def shout(ctx, text):
-    return text.upper()
-
-agent = Agent(LocalBackend("qwen2.5:7b"), tools)
-print(agent.run("Shout 'hello', then save the result to hello.txt"))
-```
+| [NOTES.md](NOTES.md) | Build log, review findings, decisions, verification |
+| [docs/01_OFFLINE_REQUIREMENTS.md](docs/01_OFFLINE_REQUIREMENTS.md) | **Everything needed to run without an API key** |
+| [docs/02_LOCAL_MODEL_SETUP.md](docs/02_LOCAL_MODEL_SETUP.md) | Ollama / llama.cpp / LM Studio; choosing models |
+| [docs/03_ARCHITECTURE.md](docs/03_ARCHITECTURE.md) | Layers, diagrams, design decisions |
+| [docs/04_TOOLS.md](docs/04_TOOLS.md) | Full tool catalogue, profiles, safety, adding tools (generated) |
+| [docs/05_COUNCIL.md](docs/05_COUNCIL.md) | Council of agents: roles, protocols, configs, next steps |
+| [docs/FILE_MAP.md](docs/FILE_MAP.md) | Every file and its label (generated) |

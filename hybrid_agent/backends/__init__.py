@@ -1,14 +1,14 @@
-"""Model backends and the factory that picks one from Config."""
+"""[BACKENDS] Model backends and the factory that picks one from Config."""
 from __future__ import annotations
 
-from ..config import Config, claude_credentials_present
+from ..core.config import Config, claude_credentials_present
 from .base import Backend, BackendUnavailable
 from .local import LocalBackend
 from .router import RouterBackend
-from .scripted import ScriptedBackend, demo_script
+from .scripted import CannedBackend, ScriptedBackend, demo_script
 
-__all__ = ["Backend", "BackendUnavailable", "LocalBackend", "RouterBackend",
-           "ScriptedBackend", "build_backend", "build_local_backend"]
+__all__ = ["Backend", "BackendUnavailable", "CannedBackend", "LocalBackend", "RouterBackend",
+           "ScriptedBackend", "build_backend", "build_backend_from_spec", "build_local_backend"]
 
 
 def build_local_backend(cfg: Config) -> LocalBackend:
@@ -17,9 +17,9 @@ def build_local_backend(cfg: Config) -> LocalBackend:
                         timeout=cfg.local_timeout, num_ctx=cfg.local_num_ctx)
 
 
-def _build_claude(cfg: Config) -> Backend:
+def _build_claude(cfg: Config, model: str | None = None) -> Backend:
     from .claude import ClaudeBackend
-    return ClaudeBackend(model=cfg.claude_model, effort=cfg.claude_effort,
+    return ClaudeBackend(model=model or cfg.claude_model, effort=cfg.claude_effort,
                          max_tokens=cfg.claude_max_tokens, fallbacks=cfg.claude_fallbacks)
 
 
@@ -44,3 +44,31 @@ def build_backend(cfg: Config) -> Backend:
                 raise
             return local
     raise ValueError(f"unknown backend {mode!r}")
+
+
+def build_backend_from_spec(spec, cfg: Config, member: str = "agent") -> Backend:
+    """Backend for a council member from a spec string (or pass a Backend through).
+
+        "default" | "local" | "local:<model>" | "claude" | "claude:<model>" | "scripted"
+
+    When cfg.backend == "scripted", every spec becomes a CannedBackend (dry run).
+    """
+    if isinstance(spec, Backend):
+        return spec
+    if cfg.backend == "scripted":
+        # Dry run: --backend scripted replaces every member's model with canned
+        # replies, so a council config can be checked without any model installed.
+        return CannedBackend(member)
+    kind, _, model = str(spec).partition(":")
+    if kind == "default":
+        return build_backend(cfg)
+    if kind == "scripted":
+        return CannedBackend(member)
+    if kind == "local":
+        local = build_local_backend(cfg)
+        if model:
+            local.model = model
+        return local
+    if kind == "claude":
+        return RouterBackend(primary=_build_claude(cfg, model or None), fallback=build_local_backend(cfg))
+    raise ValueError(f"unknown backend spec '{spec}' (use default, local[:model], claude[:model], scripted)")

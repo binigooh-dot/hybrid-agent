@@ -1,4 +1,4 @@
-"""Local model backend - the piece that makes the agent work with NO API key.
+"""[BACKENDS / local] Local model backend - the piece that makes the agent work with NO API key.
 
 Supports two kinds of local server, both spoken to with the standard library
 (urllib), so nothing needs to be pip-installed:
@@ -28,7 +28,7 @@ import urllib.request
 import uuid
 from typing import Any
 
-from ..messages import LLMResponse, Message, ToolCall
+from ..core.messages import LLMResponse, Message, ToolCall
 from .base import Backend, BackendUnavailable
 
 PROMPT_TOOL_INSTRUCTIONS = """\

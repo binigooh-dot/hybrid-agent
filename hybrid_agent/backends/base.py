@@ -1,15 +1,11 @@
-"""The interface every model backend implements."""
+"""[BACKENDS / interface] The interface every model backend implements."""
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from typing import Any
 
-from ..messages import LLMResponse, Message
-
-
-class BackendUnavailable(RuntimeError):
-    """Raised when a backend can't serve a request (no network, no key,
-    server down, rate-limited). The router catches this and falls back."""
+from ..core.errors import BackendUnavailable  # noqa: F401  (re-exported)
+from ..core.messages import LLMResponse, Message
 
 
 class Backend(ABC):

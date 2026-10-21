@@ -1,0 +1,96 @@
+"""[TESTS / tools: web + network + knowledge parsing + memory + documents]
+
+Web tools are tested against a local HTTP server, never the internet.
+"""
+from __future__ import annotations
+
+import json
+import unittest
+
+from hybrid_agent.tools.builtin.documents import bm25_rank, chunk_text, tokenize
+from hybrid_agent.tools.builtin.knowledge import parse_feed
+from hybrid_agent.tools.builtin.web import html_to_text
+
+from .helpers import QuietHandler, ToolTestCase, serve
+
+PAGE = ("<html><head><title>t</title><script>evil()</script></head><body><h1>Hello</h1>"
+        "<p>World <a href='/next'>Next page</a> <a href='https://other.org/x'>Other</a></p></body></html>")
+RSS = ("<rss><channel><item><title>News 1</title><link>http://a/1</link><pubDate>Mon</pubDate>"
+       "<description>&lt;b&gt;Big&lt;/b&gt; story</description></item></channel></rss>")
+
+
+class Site(QuietHandler):
+    def do_GET(self):
+        if self.path == "/":
+            return self.send(200, PAGE, "text/html; charset=utf-8")
+        if self.path == "/data.json":
+            return self.send(200, {"ok": True})
+        return self.send(404, "nope", "text/plain")
+
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length", 0))
+        return self.send(201, {"got": self.rfile.read(n).decode()})
+
+
+class WebToolTests(ToolTestCase, unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        self.url = serve(self, Site)
+
+    def test_fetch_and_links(self):
+        text = self.ok("fetch_url", url=self.url + "/")
+        self.assertIn("Hello", text)
+        self.assertNotIn("evil", text)
+        links = self.ok("extract_links", url=self.url + "/")
+        self.assertIn(f"Next page: {self.url}/next", links)
+        self.assertNotIn("Other", self.ok("extract_links", url=self.url + "/", contains="next"))
+        self.assertIn("HTTP 404", self.call("fetch_url", url=self.url + "/missing").content)
+        self.assertTrue(self.call("fetch_url", url="file:///etc/passwd").is_error)
+
+    def test_download_http_check(self):
+        self.ok("download_file", url=self.url + "/data.json", path="d/data.json")
+        self.assertEqual(json.loads((self.ws / "d/data.json").read_text()), {"ok": True})
+        self.assertIn("HTTP 201", self.ok("http_request", url=self.url + "/", method="POST", body="ping"))
+        self.assertIn('"status": 200', self.ok("check_url", url=self.url + "/"))
+        port = int(self.url.rsplit(":", 1)[1])
+        self.assertIn("OPEN", self.ok("check_port", host="127.0.0.1", port=port))
+        self.assertIn("127.0.0.1", self.ok("dns_lookup", hostname="localhost"))
+
+    def test_parsers(self):
+        self.assertEqual(html_to_text("<p>a</p><p>b</p>"), "a\nb")
+        items = parse_feed(RSS)
+        self.assertEqual((items[0]["title"], items[0]["summary"]), ("News 1", "Big story"))
+        atom = ('<feed xmlns="http://www.w3.org/2005/Atom"><entry><title>P</title>'
+                '<link href="http://x"/><updated>2026</updated></entry></feed>')
+        self.assertEqual(parse_feed(atom)[0]["link"], "http://x")
+
+
+class MemoryAndDocsTests(ToolTestCase, unittest.TestCase):
+    def test_memory_roundtrip(self):
+        self.ok("remember", key="fav_colour", value="green", tags=["prefs"])
+        self.assertIn("green", self.ok("recall", query="colour"))
+        self.assertIn("green", self.ok("recall", query="prefs"))
+        self.ok("forget", key="fav_colour")
+        self.assertIn("Nothing", self.ok("recall", query="colour"))
+
+    def test_document_search(self):
+        self.ok("write_file", path="docs/cats.md", content="Cats purr and sleep a lot.\n" * 3)
+        self.ok("write_file", path="docs/rockets.md", content="Rockets need fuel and oxygen to reach orbit.\n")
+        self.assertTrue(self.call("search_documents", query="x").is_error)  # no index yet
+        self.assertIn("2 files", self.ok("index_documents"))
+        top = self.ok("search_documents", query="orbit fuel", top_k=1)
+        self.assertIn("rockets.md", top)
+        self.assertNotIn("cats.md", top)
+
+    def test_bm25_and_chunks(self):
+        docs = [{"tf": dict(__import__("collections").Counter(tokenize(t))), "len": len(tokenize(t)), "t": t}
+                for t in ("apple banana", "banana banana cherry", "dog")]
+        ranked = bm25_rank("banana", docs)
+        self.assertEqual(ranked[0][1]["t"], "banana banana cherry")
+        chunks = chunk_text("\n".join(f"line {i} " + "x" * 50 for i in range(100)), size=500, overlap=100)
+        self.assertGreater(len(chunks), 5)
+        self.assertEqual(chunks[0][0], 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

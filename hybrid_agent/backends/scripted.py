@@ -1,13 +1,14 @@
-"""Scripted backend: returns pre-written replies. No model, no network.
+"""[BACKENDS / scripted] Scripted backend: returns pre-written replies. No model, no network.
 
 Used by the test-suite and for a smoke-test demo (`--backend scripted`) so you
 can verify the agent loop + tools work before installing any model.
 """
 from __future__ import annotations
 
+import re
 from typing import Callable
 
-from ..messages import LLMResponse, Message, ToolCall
+from ..core.messages import LLMResponse, Message, ToolCall
 from .base import Backend
 
 Step = Message | Callable[[list[Message]], Message]
@@ -45,3 +46,44 @@ def demo_script() -> ScriptedBackend:
             "Demo complete. Tool results were:\n"
             + "\n".join(f"- {m.name}: {m.content[:80]}" for m in msgs if m.role == "tool"))),
     ])
+
+
+class CannedBackend(Backend):
+    """Deterministic, prompt-aware fake model for council demos and tests.
+
+    It writes the kind of reply the council protocols ask for: posts one note
+    to the shared board (to exercise tool use), proposes options when asked,
+    and ends opinions with VOTE/CONFIDENCE lines, picking an option based on
+    the member's name so the demo shows some disagreement.
+    """
+    name = "canned"
+    model = "canned"
+
+    def __init__(self, member: str = "agent"):
+        self.member = member
+
+    def chat(self, system, messages, tools=None) -> LLMResponse:
+        last = messages[-1]
+        tool_names = {t["name"] for t in tools or []}
+        if last.role == "user" and "board_post" in tool_names and "Council question" in last.content \
+                and not any(m.role == "tool" for m in messages):
+            msg = Message(role="assistant", content="Sharing a note first.", tool_calls=[ToolCall(
+                f"c-{self.member}", "board_post",
+                {"content": f"{self.member} is looking into this.", "topic": "status"})])
+            return LLMResponse(msg, "tool_use", self.name, self.model)
+        prompt = next(m.content for m in reversed(messages) if m.role == "user")
+        if "List 2 to 5 distinct options" in prompt:
+            text = "- Option A\n- Option B"
+        elif "As chair" in prompt:
+            text = (f"[{self.member}] Council decision (demo): the members' views were weighed; "
+                    "see the vote result above. Confidence: medium.")
+        else:
+            options = re.findall(r"^- (.+)$", prompt.split("Options:", 1)[1], re.M) if "Options:" in prompt else []
+            topic = re.search(r"Council (?:question|task):\n(.+)", prompt)
+            kind = "revised draft" if "Revise the draft" in prompt else "critique" if "Critique it" in prompt \
+                else "position"
+            text = f"[{self.member}] My {kind} (demo reply) on: {topic.group(1)[:80] if topic else 'the question'}"
+            if options:
+                pick = options[sum(map(ord, self.member)) % len(options)]
+                text += f"\n\nVOTE: {pick}\nCONFIDENCE: 0.{5 + len(self.member) % 5}"
+        return LLMResponse(Message(role="assistant", content=text), "end_turn", self.name, self.model)

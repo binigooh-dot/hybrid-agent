@@ -1,4 +1,4 @@
-"""Router: try the primary backend, fall back to the secondary on failure.
+"""[BACKENDS / router] Router: try the primary backend, fall back to the secondary on failure.
 
 Analogy: a phone that prefers Wi-Fi (Claude) but silently switches to
 mobile data (local model) when Wi-Fi drops. The call doesn't end.

@@ -1,4 +1,4 @@
-"""Claude backend (optional - needs the `anthropic` package and credentials).
+"""[BACKENDS / claude] Claude backend (optional - needs the `anthropic` package and credentials).
 
 Uses the official Anthropic Python SDK with a manual tool-use loop (the loop
 itself lives in agent.py so it is shared with the local backend).
@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..messages import LLMResponse, Message, ToolCall
+from ..core.messages import LLMResponse, Message, ToolCall
 from .base import Backend, BackendUnavailable
 
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
