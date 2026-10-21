@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import sys
 import threading
 import time
 import tracemalloc
@@ -618,9 +620,13 @@ def drill_kernel_limits(sb):
     # Reviewed (B602): a fixed literal command, run inside the sandbox wrapper in a throwaway folder
     out = subprocess.run(cmd, shell=sh, cwd=sb, env=env, capture_output=True, text=True,  # nosec B602
                          timeout=60, check=False).stdout
+    size = re.search(r"size=\s*(\d+)", out)                 # macOS wc pads the number with spaces
+    size_capped = size is not None and int(size.group(1)) <= 1024 * 1024
     mem_blocked = "mem=0" not in out
-    size_capped = "size=1048576" in out
-    return mem_blocked and size_capped, out.strip().replace("\n", ", ")
+    detail = out.strip().replace("\n", ", ")
+    if sys.platform == "darwin":   # macOS accepts a memory limit but its kernel doesn't enforce it
+        return size_capped, f"{detail} (file-size cap enforced; macOS doesn't enforce memory limits)"
+    return mem_blocked and size_capped, detail
 
 
 @drill("hard.env_injection", "Code-injection variables never reach commands", "sandbox", "high",

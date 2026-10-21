@@ -71,28 +71,36 @@ _MODIFYING = re.compile(
 _TOKEN_SPLIT = re.compile(r"[\s'\"=;&|()<>]+")
 
 
+def _token_path(tok: str, home: str, workspace: Path | None) -> Path | None:
+    """The path a command-line token names (None for flags, plain words, /dev/null-style and /tmp paths)."""
+    if not tok or tok.startswith("-") or ("/" not in tok and not tok.startswith(("~", "$HOME", "${HOME}"))):
+        return None
+    expanded = tok.replace("${HOME}", home).replace("$HOME", home)
+    if expanded.startswith("~"):
+        expanded = home + expanded[1:]
+    if expanded in {"/dev/null", "/dev/stdout", "/dev/stderr"} or expanded.startswith("/tmp/"):  # noqa: S108  # nosec B108 - only skips scanning
+        return None
+    rooted = os.path.isabs(expanded) or expanded.startswith(("/", "\\"))   # Windows: "/etc" is rooted, not relative
+    p = Path(expanded) if rooted else ((workspace or Path.cwd()) / expanded)
+    try:
+        return p.resolve()
+    except OSError:
+        return None
+
+
 def protected_targets(command: str, workspace: Path | None = None, extra: list[Path] | None = None) -> list[str]:
     """Protected paths a *modifying* shell command mentions (empty if none / read-only command)."""
     if not _MODIFYING.search(command):
         return []
-    home = str(Path.home())
-    prot = protected_paths(extra)
+    home, prot = str(Path.home()), protected_paths(extra)
+    ws = workspace.resolve() if workspace else None
     hits = []
     for tok in _TOKEN_SPLIT.split(command):
-        if not tok or tok.startswith("-") or ("/" not in tok and not tok.startswith(("~", "$HOME", "${HOME}"))):
+        target = _token_path(tok, home, workspace)
+        # The workspace is the agent's own folder: never "protected", even when it sits under a protected
+        # system path (macOS temp folders live in /private/var/folders/...). `..` escapes resolve outside it.
+        if target is None or (ws and (target == ws or ws in target.parents)):
             continue
-        expanded = tok.replace("${HOME}", home).replace("$HOME", home)
-        if expanded.startswith("~"):
-            expanded = home + expanded[1:]
-        rooted = os.path.isabs(expanded) or expanded.startswith(("/", "\\"))   # Windows: "/etc" is rooted, not relative
-        p = Path(expanded) if rooted else ((workspace or Path.cwd()) / expanded)
-        if expanded in {"/dev/null", "/dev/stdout", "/dev/stderr"} or expanded.startswith("/tmp/"):  # noqa: S108  # nosec B108 - only skips scanning
-            continue
-        for q in prot:
-            try:
-                if p.resolve() == q or q in p.resolve().parents:
-                    hits.append(tok)
-                    break
-            except OSError:
-                continue
+        if any(target == q or q in target.parents for q in prot):
+            hits.append(tok)
     return hits

@@ -31,6 +31,15 @@ Also:
     download-artifact@v7 and action-gh-release@v3 (each verified from its action.yml). A test keeps it that way.
   - "ubuntu-latest will migrate to Ubuntu 26": pinned `ubuntu-24.04`, so the Linux download (which needs
     a glibc at least as new as the build machine's) keeps working on more systems.
+- **First macOS run** (Intel runner, picked up at once) found 3 macOS-only issues, all fixed:
+  - **Safe commands were refused.** `rm -rf build/` and `mkdir -p out` failed because macOS temp workspaces
+    live under `/private/var/folders/…`, a protected system path. Paths inside the workspace are now never
+    "protected"; `..` escapes and other paths under the protected folder still are. A regression test
+    reproduces it on any OS.
+  - **The memory cap isn't enforced on macOS.** The kernel accepts the limit but doesn't enforce it (the
+    600 MB allocation succeeded). The file-size cap held. The drill and docs now say so instead of failing.
+  - **macOS `wc` pads its numbers** (`size= 1048576`), so the drill's file-size check misread a working cap.
+    It's now parsed robustly.
 - **Windows dry run:** the whole suite ran on Windows Python 3.12 under Wine before pushing. The only
   failures were two Wine-only differences (no git in Wine; Wine's symlinks), both of which pass on the real
   Windows runner.

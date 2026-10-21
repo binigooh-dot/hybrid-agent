@@ -25,6 +25,17 @@ class ProtectedPathTests(unittest.TestCase):
         for cmd in ("cat /etc/hosts", "ls /usr/bin", "echo hi > /tmp/x", "grep foo 2>/dev/null"):
             self.assertEqual(protected_targets(cmd), [], cmd)
 
+    def test_workspace_inside_a_protected_folder_stays_usable(self):
+        """macOS: temp workspaces live under /private/var (protected). Found by the first macOS CI run."""
+        from hybrid_agent.security import protected
+        parent = Path("/opt/hybrid-agent-test/protected").resolve()   # needn't exist; not under /tmp (skipped)
+        ws = parent / "ws"
+        with mock.patch.object(protected, "protected_paths", return_value=[parent]):
+            for ok in ("rm -rf build/", "rm -rf ./dist", "mkdir -p out && echo done > out/x.txt"):
+                self.assertEqual(protected_targets(ok, ws), [], ok)
+            self.assertTrue(protected_targets("rm -rf ../secrets", ws))           # escaping the workspace
+            self.assertTrue(protected_targets(f"rm -rf {parent}/other", ws))     # elsewhere in the protected folder
+
     def test_blocklist_refuses_protected_and_internal(self):
         ws = Path(tempfile.mkdtemp())
         with self.assertRaises(ToolError):

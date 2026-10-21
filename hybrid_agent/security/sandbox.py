@@ -14,6 +14,8 @@ Modes (AGENT_SANDBOX):
 Always (except off): secret-looking environment variables (API keys, tokens…)
 are removed, and on POSIX these kernel limits apply to the command and all its
 children: CPU time, memory, size of any file written, open files, core dumps.
+(macOS accepts the memory limit but doesn't enforce it - verified on GitHub's
+macOS runner; the CPU, file-size and open-file caps do hold there.)
 
 AGENT_REQUIRE_SANDBOX=1 refuses to run commands at all when strict isolation
 is unavailable.
