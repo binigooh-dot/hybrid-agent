@@ -1,0 +1,2 @@
+# Only needed to use Claude. Local-only mode needs no packages.
+anthropic>=1.0

@@ -1,0 +1,15 @@
+[project]
+name = "hybrid-agent"
+version = "0.1.0"
+description = "Tool-using agent that runs on a local model with no API key, with optional Claude."
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+claude = ["anthropic>=1.0"]
+
+[project.scripts]
+hybrid-agent = "hybrid_agent.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["hybrid_agent*"]
