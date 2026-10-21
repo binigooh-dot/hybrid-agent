@@ -104,8 +104,8 @@ class CouncilResult:
             return None
         directory.mkdir(parents=True, exist_ok=True)
         stem = directory / f"council-{time.strftime('%Y%m%d-%H%M%S')}-{self.protocol}"
-        stem.with_suffix(".md").write_text(redact(self.to_markdown()))
-        stem.with_suffix(".json").write_text(redact(json.dumps(self.to_dict(), indent=2, default=str)))
+        stem.with_suffix(".md").write_text(redact(self.to_markdown()), encoding="utf-8")
+        stem.with_suffix(".json").write_text(redact(json.dumps(self.to_dict(), indent=2, default=str)), encoding="utf-8")
         return stem.with_suffix(".md")
 
 
@@ -223,7 +223,7 @@ class Council:
         elif isinstance(source, dict):
             data = source
         else:
-            data = json.loads(Path(source).read_text())
+            data = json.loads(Path(source).read_text(encoding="utf-8"))
         specs = [MemberSpec.from_dict(m) for m in data.get("members", [])]
         personas = {}
         if data.get("personas"):

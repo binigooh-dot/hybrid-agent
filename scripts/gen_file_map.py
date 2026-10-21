@@ -27,19 +27,19 @@ def label(p: Path) -> str:
         return STATIC[rel]
     try:
         if p.suffix == ".py":
-            doc = ast.get_docstring(ast.parse(p.read_text()))
+            doc = ast.get_docstring(ast.parse(p.read_text(encoding="utf-8")))
             return (doc or "").strip().splitlines()[0] if doc else ""
         if p.suffix == ".md":
-            first = p.read_text().lstrip().splitlines()[0]
+            first = p.read_text(encoding="utf-8").lstrip().splitlines()[0]
             return "[DOCS] " + first.lstrip("# ").strip()
         if p.suffix in {".html", ".css", ".js"}:
-            head = p.read_text()[:400]
+            head = p.read_text(encoding="utf-8")[:400]
             for marker in ("<!-- [", "/* [", "// ["):
                 if marker in head:
                     return "[" + head.split(marker, 1)[1].split("]", 1)[0] + "]" + \
                         head.split(marker, 1)[1].split("]", 1)[1].split("\n")[0].rstrip(" */->")
         if p.suffix == ".json":
-            return json.loads(p.read_text()).get("_comment", "").split(".")[0]
+            return json.loads(p.read_text(encoding="utf-8")).get("_comment", "").split(".")[0]
     except (SyntaxError, IndexError, ValueError):
         pass
     return ""
@@ -71,5 +71,5 @@ def build() -> str:
 
 
 if __name__ == "__main__":
-    (ROOT / "docs" / "FILE_MAP.md").write_text(build())
+    (ROOT / "docs" / "FILE_MAP.md").write_text(build(), encoding="utf-8")
     print("wrote docs/FILE_MAP.md")

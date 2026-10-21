@@ -39,6 +39,9 @@ ENV_VARS = [
     ("AGENT_SAFE_MODE", "0", "1 = read-only agent: no write or execute tools at all."),
     ("AGENT_MIN_FREE_MB", "1024", "Refuse writes/commands when free disk space would drop below this."),
     ("SEARXNG_URL", "(unset)", "Optional self-hosted search engine (no key)."),
+    ("AGENT_CONTACT", "(unset)", "Your email or web page, sent in the User-Agent so sites like Wikipedia know who runs the agent."),
+    ("HYBRID_AGENT_HOME", "next to the app", "The portable home folder: settings, workspace, tasks, models (see docs/08)."),
+    ("AGENT_AUTO_START_MODEL", "1", "Start the local model engine when the app opens."),
     ("COUNCIL_CONFIG", "(unset)", "Default council config file."),
     ("COUNCIL_WORKERS", "1", "Council members answering in parallel."),
     ("ANTHROPIC_API_KEY", "(unset)", "Optional. Enables Claude as the main model."),
@@ -79,15 +82,7 @@ PROTOCOL_INFO = {
                  "best": "producing a plan, essay or code", "calls": "1 + R x (N - 1) + R"},
 }
 
-MODELS = [
-    ("qwen2.5:3b", "~2 GB", "4 GB", "minimal", "Low-end laptops; simple tasks"),
-    ("llama3.2:3b", "~2 GB", "4 GB", "minimal", "Similar tier"),
-    ("qwen2.5:7b", "~4.7 GB", "8 GB", "core", "Default: good balance"),
-    ("llama3.1:8b", "~4.9 GB", "8 GB", "core", "Solid general model; good council contrast to qwen"),
-    ("mistral-nemo:12b", "~7 GB", "12 GB", "core / coding", "Strong reasoning for its size"),
-    ("qwen2.5:14b", "~9 GB", "16 GB", "coding / research", "Much better at multi-step work"),
-    ("qwen2.5:32b", "~20 GB", "24-32 GB / GPU", "full", "Approaches hosted-model quality on many tasks"),
-]
+from ..runtime.ollama import MODELS  # noqa: E402 - one list for the guide and the Control panel
 
 GLOSSARY = [
     ("Agent", "a chef following a recipe", "A model in a loop: it decides on a step, uses a tool, reads the result, and repeats until done."),
@@ -169,7 +164,7 @@ def collect_data(cfg=None) -> dict:
     log_dir = getattr(cfg, "log_dir", None)
     if log_dir and (Path(log_dir) / "diagnostics-latest.json").exists():
         try:
-            report = json.loads((Path(log_dir) / "diagnostics-latest.json").read_text())
+            report = json.loads((Path(log_dir) / "diagnostics-latest.json").read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             report = None
     return {
@@ -184,12 +179,20 @@ def collect_data(cfg=None) -> dict:
     }
 
 
+def _font_face() -> str:
+    """The faces' font, embedded so the guide stays one offline file (18 KB, see static/fonts)."""
+    import base64
+    data = (Path(__file__).parent / "static" / "fonts" / "face-mono.woff2").read_bytes()
+    return ('@font-face{font-family:"Face Mono";font-display:block;'
+            f'src:url(data:font/woff2;base64,{base64.b64encode(data).decode()}) format("woff2")}}')
+
+
 def build_guide_html(nonce: str | None = None, cfg=None) -> str:
     data = collect_data(cfg)
     blob = json.dumps(data, separators=(",", ":")).replace("</", "<\\/")
     n = f' nonce="{html.escape(nonce)}"' if nonce else ""
     return (TEMPLATE.replace("%%NONCE%%", n).replace("%%DATA%%", blob)
-            .replace("%%LAYERS%%", _svg_layers()).replace("%%LOOP%%", _svg_loop())
+            .replace("%%FONT%%", _font_face()).replace("%%LAYERS%%", _svg_layers()).replace("%%LOOP%%", _svg_loop())
             .replace("%%VERSION%%", html.escape(data["version"])).replace("%%GENERATED%%", data["generated"]))
 
 
@@ -233,7 +236,8 @@ table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;p
 .cat-block{margin:10px 0}.cat-block h4{margin:8px 0 4px;font-size:14px}
 .cbs{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:13px;font-family:var(--mono)}.cbs label{display:flex;gap:4px;align-items:center}
 .faces{display:flex;flex-wrap:wrap;gap:6px}.faces figure{margin:0;text-align:center;font-size:12px;color:var(--muted)}
-.ascii{font-family:var(--mono);font-size:11px;line-height:1.15;margin:0;padding:6px;background:var(--panel2);border-radius:8px;white-space:pre}
+%%FONT%%
+.ascii{font-family:"Face Mono",monospace;font-size:12px;line-height:1;margin:0;padding:6px;background:var(--panel2);border-radius:8px;white-space:pre;font-variant-ligatures:none}
 .persona{display:grid;grid-template-columns:170px minmax(0,1fr);gap:14px;align-items:start}.persona .big .ascii{font-size:15px}
 @media (max-width:820px){.layout{grid-template-columns:minmax(0,1fr)}nav.side{position:static;height:auto;display:flex;flex-wrap:wrap;gap:4px;border-right:0;border-bottom:1px solid var(--line)}
 nav.side .logo,nav.side .ver{width:100%}main{padding:16px}.persona{grid-template-columns:minmax(0,1fr)}}
@@ -525,6 +529,8 @@ const LAYERS = [["Workspace fence", "Paths can't leave the workspace: .., absolu
   ["Undo", "Every overwrite, edit, move and delete is backed up first; deletes go to a trash can. Restore from the Safety tab or restore_backup."],
   ["Disk guard", "Writes and commands are refused when free space would drop below AGENT_MIN_FREE_MB (or 2% of the disk)."],
   ["Safe mode", "AGENT_SAFE_MODE=1 gives the agent read-only tools only: nothing can be written or executed."],
+  ["Unattended tasks", "Scheduled tasks default to look-don't-touch: read and network tools only. 'Ask me first' tasks need your Allow; nobody there means Deny."],
+  ["Online etiquette", "An honest User-Agent with your contact, Retry-After honoured, proxies supported. The agent never pretends to be a browser."],
   ["Audit & integrity", "Every write/execute call is logged to audit.jsonl; a SHA-256 manifest detects changed or tampered package files."]];
 for (const [t, d] of LAYERS) $("#layers").append(el("div", { class: "card" }, el("b", { text: t }), el("p", { text: d, style: "margin:6px 0 0;font-size:14px" })));
 const rep = D.report ? Object.fromEntries(D.report.drills.map((d) => [d.key, d])) : null;

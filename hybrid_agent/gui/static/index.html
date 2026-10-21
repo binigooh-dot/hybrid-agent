@@ -12,28 +12,34 @@
 <header class="topbar">
   <div class="brand"><img src="/static/favicon.svg" alt="">Agent Studio</div>
   <nav class="tabs" role="tablist" aria-label="Sections">
-    <button role="tab" data-tab="council" aria-selected="true">Council</button>
-    <button role="tab" data-tab="chat" aria-selected="false">Chat</button>
-    <button role="tab" data-tab="personas" aria-selected="false">Personas</button>
-    <button role="tab" data-tab="tools" aria-selected="false">Tools</button>
-    <button role="tab" data-tab="safety" aria-selected="false">Safety <span id="shield" class="shield" title="Safety status"></span></button>
+    <span class="tab-group" aria-label="Work">
+      <button role="tab" data-tab="council" aria-selected="true">Council</button>
+      <button role="tab" data-tab="chat" aria-selected="false">Chat</button>
+      <button role="tab" data-tab="tasks" aria-selected="false">Tasks <span id="task-count" class="count"></span></button>
+    </span>
+    <span class="tab-group" aria-label="Library">
+      <button role="tab" data-tab="personas" aria-selected="false">Personas</button>
+      <button role="tab" data-tab="tools" aria-selected="false">Tools</button>
+    </span>
+    <span class="tab-group" aria-label="System">
+      <button role="tab" data-tab="control" aria-selected="false">Control</button>
+      <button role="tab" data-tab="safety" aria-selected="false">Safety <span id="shield" class="shield" title="Safety status"></span></button>
+    </span>
   </nav>
   <div class="spacer"></div>
   <div id="busy" class="busy hidden"><span class="dot"></span><span id="busy-label">Working…</span>
     <button id="stop" class="btn small danger">Stop</button></div>
-  <span id="status" class="pill" title="Model">connecting…</span>
+  <button id="health" class="health" type="button" title="Open the Control panel"><span class="led"></span><span id="health-text">checking…</span></button>
   <a id="guide-link" class="btn small ghost" target="_blank" rel="noopener">Guide ↗</a>
-  <button id="theme" class="btn small ghost" title="Light / dark" aria-label="Toggle light or dark theme">🌓</button>
+  <button id="theme" class="btn small ghost" title="Light / dark" aria-label="Toggle light or dark theme">◐</button>
 </header>
 
 <div id="banner" class="banner hidden" role="status">
-  <div><b>No local model found yet.</b> <span id="banner-text"></span></div>
-  <ol>
-    <li>Install Ollama from <code>ollama.com</code>, then run <code>ollama serve</code></li>
-    <li>Download a model: <code id="banner-pull">ollama pull qwen2.5:7b</code></li>
-    <li>Reload this page. (Or try everything right now with <code>--backend scripted</code>.)</li>
-  </ol>
-  <button id="banner-close" class="btn small ghost" aria-label="Dismiss">✕</button>
+  <div><b>No local model is running yet.</b> <span id="banner-text"></span></div>
+  <p>Open the <b>Control</b> tab: install the model engine and download a model with one click each.
+    Everything stays inside your Hybrid Agent folder.</p>
+  <div class="actions"><button id="banner-go" class="btn primary small">Open Control</button>
+    <button id="banner-close" class="btn small ghost">Not now</button></div>
 </div>
 
 <main>
@@ -84,6 +90,129 @@
         <textarea id="chat-input" rows="2" placeholder="Ask the agent to do something…  (Enter sends · Shift+Enter = new line)"></textarea>
         <button class="btn primary" type="submit">Send</button>
       </form>
+    </div>
+  </section>
+
+  <!-- ================= TASKS ================= -->
+  <section id="tab-tasks" class="tab" role="tabpanel">
+    <div class="col">
+      <div class="panel">
+        <div class="feed-head"><h2>Task queue</h2>
+          <div class="actions tight"><span id="q-state" class="pill"></span>
+            <button id="q-pause" class="btn small">Pause queue</button>
+            <button id="t-new" class="btn small primary">+ New task</button></div></div>
+        <p class="hint">Tasks run one at a time when the model is free. Scheduled tasks missed while the app was closed run once when it opens.</p>
+        <div id="task-list" class="task-list"></div>
+      </div>
+      <div class="panel">
+        <div class="feed-head"><h2>Run history</h2><span class="hint">Every result is also saved in the home folder's <code>tasks/results</code>.</span></div>
+        <div id="run-list" class="table-wrap"></div>
+      </div>
+    </div>
+    <form id="task-form" class="panel task-editor">
+      <h2 id="task-heading">New task</h2>
+      <label for="tk-name">Name</label><input id="tk-name" type="text" maxlength="80" placeholder="Morning news brief" required>
+      <label>What should run?</label>
+      <div class="seg" role="radiogroup" id="tk-kind">
+        <button type="button" role="radio" data-kind="agent" aria-checked="true">🤖 Agent</button>
+        <button type="button" role="radio" data-kind="council" aria-checked="false">👥 Council</button>
+        <button type="button" role="radio" data-kind="diagnose" aria-checked="false">🛡 Safety drills</button>
+      </div>
+      <div id="tk-prompt-box"><label for="tk-prompt">Instructions</label>
+        <textarea id="tk-prompt" rows="4" placeholder="e.g. Look up today's top science news on Wikipedia's Current events page and summarise the three biggest stories."></textarea></div>
+      <div id="tk-agent-box" class="row2">
+        <div><label for="tk-persona">As persona</label><select id="tk-persona"></select></div>
+        <div><label for="tk-profile">Tools</label><select id="tk-profile"></select></div>
+      </div>
+      <div id="tk-council-box" class="hidden">
+        <label>Members</label><div id="tk-members" class="chips"></div>
+        <label for="tk-protocol">How they decide</label><select id="tk-protocol"></select>
+      </div>
+      <label>When</label>
+      <div class="when">
+        <select id="tk-sched" aria-label="Schedule">
+          <option value="manual">Only when I press Run</option><option value="once">Once, at…</option>
+          <option value="interval">Every…</option><option value="daily">Every day at…</option><option value="weekly">On certain days at…</option>
+        </select>
+        <input id="tk-at" type="datetime-local" class="hidden" aria-label="Date and time">
+        <span id="tk-every" class="hidden"><input id="tk-minutes" type="number" min="5" value="60" aria-label="Minutes"> minutes</span>
+        <input id="tk-time" type="time" value="08:00" class="hidden" aria-label="Time">
+      </div>
+      <div id="tk-days" class="chips hidden"></div>
+      <p id="tk-next" class="hint"></p>
+      <label>Permission</label>
+      <div class="perm">
+        <label class="opt"><input type="radio" name="tk-perm" value="safe" checked><span><b>Look, don't touch</b> (recommended)<br>
+          <small>Read files and browse the web, then report. Can't write, delete or run anything.</small></span></label>
+        <label class="opt"><input type="radio" name="tk-perm" value="ask"><span><b>Ask me first</b><br>
+          <small>Normal tools. Risky steps wait for your Allow; if you're away they're denied after 3 minutes.</small></span></label>
+      </div>
+      <label class="check"><input id="tk-enabled" type="checkbox" checked> Enabled</label>
+      <div class="actions">
+        <button class="btn primary" type="submit">Save task</button>
+        <button id="tk-save-run" class="btn" type="button">Save &amp; run now</button>
+        <span class="spacer"></span>
+        <button id="tk-delete" class="btn danger" type="button">Delete</button>
+      </div>
+    </form>
+  </section>
+
+  <!-- ================= CONTROL ================= -->
+  <section id="tab-control" class="tab" role="tabpanel">
+    <div class="panel span2">
+      <div class="engine">
+        <pre id="eng-face" class="ascii sm" aria-hidden="true"></pre>
+        <div class="engine-text">
+          <div class="k">Local model engine</div>
+          <div id="eng-state" class="big">…</div>
+          <div id="eng-detail" class="hint"></div>
+          <div class="progress hidden" id="eng-progress"><div></div></div>
+        </div>
+        <div class="actions tight">
+          <button id="eng-install" class="btn primary">Install engine</button>
+          <button id="eng-start" class="btn primary">Start</button>
+          <button id="eng-stop" class="btn">Stop</button>
+        </div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="feed-head"><h2>Models</h2><span id="model-active" class="pill"></span></div>
+      <div id="model-list" class="model-list"></div>
+      <h3 class="sub">Download a model</h3>
+      <div id="model-suggest" class="model-list"></div>
+      <div class="inline"><input id="model-name" type="text" placeholder="any Ollama model, e.g. gemma3:4b" aria-label="Model name">
+        <button id="model-pull" class="btn">Download</button></div>
+    </div>
+    <div class="col">
+      <div class="panel">
+        <div class="feed-head"><h2>Online check</h2><button id="online-run" class="btn small">Run check</button></div>
+        <p class="hint">Tests the agents' real web tools from this computer: Wikipedia, search, weather, arXiv.</p>
+        <div id="online-list" class="checks-list"></div>
+      </div>
+      <div class="panel">
+        <h2>Settings</h2>
+        <form id="settings-form" class="settings">
+          <label for="set-contact">Your contact for websites <small class="muted">(email or web page)</small></label>
+          <input id="set-contact" type="text" placeholder="you@example.com" maxlength="120">
+          <p class="hint">Wikipedia and others ask bots to say who runs them; identified agents get far higher limits. Only sent in the User-Agent header.</p>
+          <label for="set-searx">Your own search engine (SearXNG URL, optional)</label>
+          <input id="set-searx" type="text" placeholder="http://localhost:8888">
+          <div class="row2">
+            <div><label for="set-sandbox">Command sandbox</label><select id="set-sandbox">
+              <option value="auto">auto (recommended)</option><option value="strict">strict only</option><option value="limits">limits only</option></select></div>
+            <div><label for="set-disk">Keep free disk (MB)</label><input id="set-disk" type="number" min="256" step="256"></div>
+          </div>
+          <label class="check"><input id="set-safe" type="checkbox"> Safe mode: all agents read-only</label>
+          <label class="check"><input id="set-autostart" type="checkbox"> Start the model engine when the app opens</label>
+          <div class="actions"><button class="btn primary" type="submit">Save settings</button></div>
+        </form>
+      </div>
+      <div class="panel">
+        <h2>Storage</h2>
+        <dl id="storage" class="kv"></dl>
+        <div class="actions"><button id="quit" class="btn danger" type="button">Quit Hybrid Agent</button></div>
+        <p class="hint">Quit stops the GUI, the task scheduler and the model engine. Your files, tasks and models stay in the home folder.</p>
+      </div>
     </div>
   </section>
 
@@ -196,6 +325,10 @@
       <button id="m-yes" class="btn primary">Allow once</button>
     </div>
   </div>
+</div>
+<div id="viewer" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="v-title">
+  <div class="box wide"><h2 id="v-title"></h2><pre id="v-text" class="result"></pre>
+    <div class="actions"><button id="v-close" class="btn">Close</button></div></div>
 </div>
 <div id="toast" class="toast" role="status"></div>
 <script src="/static/app.js"></script>

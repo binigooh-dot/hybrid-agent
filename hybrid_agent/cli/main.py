@@ -182,9 +182,13 @@ def run_council(cfg: Config, args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["studio"]:          # the all-in-one app: home folder + engine + GUI + scheduler
+        from ..app import main as studio
+        return studio(argv[1:])
     ap = argparse.ArgumentParser(prog="hybrid_agent", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", nargs="?", choices=["chat", "doctor", "tools", "council", "diagnose", "gui"],
+    ap.add_argument("command", nargs="?", choices=["chat", "doctor", "tools", "council", "diagnose", "gui", "studio"],
                     default="chat")
     ap.add_argument("-p", "--prompt", help="run a single prompt (or council question) and exit")
     ap.add_argument("--backend", choices=["auto", "claude", "local", "scripted"])

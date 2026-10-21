@@ -37,7 +37,7 @@ def _size(p: Path) -> int:
 def _index(workspace: Path) -> list[dict]:
     f = _root(workspace) / "index.json"
     try:
-        return json.loads(f.read_text()) if f.exists() else []
+        return json.loads(f.read_text(encoding="utf-8")) if f.exists() else []
     except (json.JSONDecodeError, OSError):
         return []
 
@@ -46,7 +46,7 @@ def _save_index(workspace: Path, entries: list[dict]) -> None:
     f = _root(workspace) / "index.json"
     f.parent.mkdir(parents=True, exist_ok=True)
     tmp = f.with_suffix(".tmp")
-    tmp.write_text(json.dumps(entries, indent=1))
+    tmp.write_text(json.dumps(entries, indent=1), encoding="utf-8")
     tmp.replace(f)
 
 

@@ -113,7 +113,7 @@ def read_text_limited(path: Path, limit: int = MAX_TEXT_BYTES) -> str:
     if size > limit:
         raise ToolError(f"{path.name} is {size / 1e6:.0f} MB; whole-file operations are limited to "
                         f"{limit / 1e6:.0f} MB. Use read_file with offset/limit or search_text instead.")
-    return path.read_text(errors="replace")
+    return path.read_text(errors="replace", encoding="utf-8")
 
 
 # --------------------------------------------------------------- shell guard
@@ -232,13 +232,13 @@ def run_regex_isolated(op: str, payload: dict, timeout: float = REGEX_TIMEOUT):
     """Run a regex operation in a child Python process that is killed on timeout."""
     import json
     import subprocess
-    import sys
     pkg_root = str(Path(__file__).resolve().parent.parent.parent)
     code = (f"import sys; sys.path.insert(0, {pkg_root!r}); "
             "from hybrid_agent.security.regex_worker import main; main()")
     try:
-        r = subprocess.run([sys.executable, "-I", "-c", code], input=json.dumps({"op": op, **payload}),
-                           capture_output=True, text=True, timeout=timeout, check=False)
+        from ..core.pyexe import internal_command
+        r = subprocess.run([*internal_command(), "-X", "utf8", "-I", "-c", code], input=json.dumps({"op": op, **payload}),
+                           capture_output=True, text=True, encoding="utf-8", timeout=timeout, check=False)
     except subprocess.TimeoutExpired:
         raise ToolError(f"Regex gave up after {timeout}s: the pattern backtracks catastrophically on this "
                         "input (nested repetition like (a+)+). Simplify the pattern.") from None

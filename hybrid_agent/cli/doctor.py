@@ -48,7 +48,9 @@ def check_local_model(cfg: Config) -> list[Row]:
         else:
             models = [m["id"] for m in _get_json(cfg.local_base_url.rstrip("/") + "/v1/models").get("data", [])]
     except Exception as e:  # noqa: BLE001 - deliberate boundary: report the failure, never crash
-        hint = " - install Ollama and run `ollama serve`" if cfg.local_provider == "ollama" else ""
+        from ..core.home import home_dir
+        hint = (" - open Agent Studio's Control tab and press Install engine / Start" if home_dir()
+                else " - install Ollama and run `ollama serve`") if cfg.local_provider == "ollama" else ""
         return [(FAIL, server, f"{cfg.local_base_url}: {e}{hint}", True), (FAIL, model, "skipped (server down)", True)]
     have = model_available(cfg.local_model, models)
     detail = "available" if have else \
@@ -65,7 +67,7 @@ def check_workspace(cfg: Config) -> list[Row]:
     try:
         path.mkdir(parents=True, exist_ok=True)
         probe = path / ".write_test"
-        probe.write_text("ok")
+        probe.write_text("ok", encoding="utf-8")
         probe.unlink()
     except OSError as e:
         return [(FAIL, "Workspace writable", str(e), True)]
@@ -97,7 +99,7 @@ def check_personas_and_council(cfg: Config) -> list[Row]:
     if cfg.council_config:
         try:
             from ..council import MemberSpec
-            data = json.loads(cfg.council_config.read_text())
+            data = json.loads(cfg.council_config.read_text(encoding="utf-8"))
             specs = [MemberSpec.from_dict(m) for m in data.get("members", [])]
             n = len(specs) + len(data.get("personas", []))
             rows.append((OK, "Council config (optional)", f"{cfg.council_config}: {n} members", False))

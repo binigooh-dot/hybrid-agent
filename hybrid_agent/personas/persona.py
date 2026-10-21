@@ -91,7 +91,7 @@ def _load_dir(folder: Path, builtin: bool) -> dict[str, Persona]:
         return out
     for f in sorted(folder.glob("*.json")):
         try:
-            p = Persona.from_dict(json.loads(f.read_text()), builtin=builtin)
+            p = Persona.from_dict(json.loads(f.read_text(encoding="utf-8")), builtin=builtin)
         except (ValueError, TypeError, json.JSONDecodeError) as e:
             raise ValueError(f"{f}: {e}") from None
         out[p.id] = p
@@ -117,7 +117,7 @@ def save_persona(persona: Persona, user_dir: Path) -> Path:
     user_dir.mkdir(parents=True, exist_ok=True)
     path = user_dir / f"{persona.id}.json"
     tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(persona.to_dict(), indent=2))
+    tmp.write_text(json.dumps(persona.to_dict(), indent=2), encoding="utf-8")
     tmp.replace(path)
     return path
 

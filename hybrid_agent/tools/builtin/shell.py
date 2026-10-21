@@ -12,9 +12,9 @@ import os
 import shutil
 import signal
 import subprocess
-import sys
 import threading
 
+from ...core.pyexe import user_command
 from ...security.guards import check_shell_command, ensure_disk_space
 from ...security.sandbox import Limits
 from ...security.sandbox import wrap as sandbox_wrap
@@ -42,9 +42,11 @@ def _kill_tree(proc: subprocess.Popen) -> None:
     try:
         if os.name == "posix":
             os.killpg(proc.pid, signal.SIGKILL)
-        else:
+        else:   # Windows: /T = the whole tree (cmd.exe and everything it started), /F = force
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True,
+                           timeout=15, check=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             proc.kill()
-    except (ProcessLookupError, PermissionError):
+    except (ProcessLookupError, PermissionError, OSError, subprocess.TimeoutExpired):
         pass
 
 
@@ -130,7 +132,7 @@ def register(reg: ToolRegistry) -> None:
        S(code="string", timeout="integer?|Seconds, default from config"),
        risk="execute", requires_approval=True)
     def run_python(ctx: ToolContext, code: str, timeout: int | None = None):
-        return run_process([sys.executable, "-I", "-"], ctx, stdin=code, timeout=timeout)
+        return run_process([*user_command(), "-X", "utf8", "-I", "-"], ctx, stdin=code, timeout=timeout)
 
     @t("which", "Check whether command-line programs are installed, and where.",
        S(programs={"type": "array", "items": {"type": "string"}}))

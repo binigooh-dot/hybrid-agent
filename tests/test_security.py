@@ -86,24 +86,24 @@ class BackupTests(unittest.TestCase):
     def test_delete_goes_to_trash_and_restores(self):
         d = self.ws / "dir"
         d.mkdir()
-        (d / "a.txt").write_text("A")
+        (d / "a.txt").write_text("A", encoding="utf-8")
         e = backup.snapshot(self.ws, d, "delete", move=True)
         self.assertFalse(d.exists())
         self.assertEqual(backup.restore(self.ws, e["id"]), "dir")
-        self.assertEqual((d / "a.txt").read_text(), "A")
+        self.assertEqual((d / "a.txt").read_text(encoding="utf-8"), "A")
 
     def test_restore_backs_up_current_version_first(self):
         f = self.ws / "f.txt"
-        f.write_text("old")
+        f.write_text("old", encoding="utf-8")
         e = backup.snapshot(self.ws, f, "edit")
-        f.write_text("new")
+        f.write_text("new", encoding="utf-8")
         backup.restore(self.ws, e["id"])
-        self.assertEqual(f.read_text(), "old")
+        self.assertEqual(f.read_text(encoding="utf-8"), "old")
         self.assertEqual(backup.list_backups(self.ws)[0]["action"], "replaced by restore")
 
     def test_pruning_and_size_cap(self):
         f = self.ws / "f.txt"
-        f.write_text("x" * 100)
+        f.write_text("x" * 100, encoding="utf-8")
         with mock.patch.object(backup, "MAX_BACKUP_BYTES", 250):
             for _ in range(5):
                 backup.snapshot(self.ws, f, "edit")
@@ -122,18 +122,18 @@ class AuditAndIntegrityTests(unittest.TestCase):
     def test_audit_log_is_redacted(self):
         d = Path(tempfile.mkdtemp())
         audit.record(d, "chat", "run_shell", "execute", {"command": "curl -H 'x-api-key: sk-ant-abcdefghijklmnopqrstuvwxyz'"}, True)
-        line = json.loads((d / "audit.jsonl").read_text())
+        line = json.loads((d / "audit.jsonl").read_text(encoding="utf-8"))
         self.assertEqual(line["tool"], "run_shell")
         self.assertNotIn("abcdefghijklmnop", json.dumps(line))
 
     def test_manifest_detects_tampering(self):
         root = Path(tempfile.mkdtemp())
-        (root / "a.py").write_text("print(1)")
+        (root / "a.py").write_text("print(1)", encoding="utf-8")
         self.assertEqual(audit.verify_manifest(root)[0], "absent")
         audit.write_manifest(root)
         self.assertEqual(audit.verify_manifest(root)[0], "ok")
-        (root / "a.py").write_text("print('pwned')")
-        (root / "new.py").write_text("")
+        (root / "a.py").write_text("print('pwned')", encoding="utf-8")
+        (root / "new.py").write_text("", encoding="utf-8")
         state, detail = audit.verify_manifest(root)
         self.assertEqual(state, "changed")
         self.assertIn("a.py", detail)

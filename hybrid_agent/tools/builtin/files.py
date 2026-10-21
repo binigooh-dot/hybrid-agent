@@ -76,7 +76,7 @@ def register(reg: ToolRegistry) -> None:
             raise ToolError(f"{path} is a binary file ({_human(p.stat().st_size)}); use file_info or hash_file.")
         start = max(offset, 1) - 1
         limit = max(1, min(limit, 5000))
-        with p.open(errors="replace") as f:  # streamed: never loads the whole file
+        with p.open(errors="replace", encoding="utf-8") as f:  # streamed: never loads the whole file
             chunk = [line.rstrip("\n") for line in itertools.islice(f, start, start + limit)]
             more = sum(1 for _ in f) if p.stat().st_size < 50_000_000 else None
         body = "\n".join(f"{i:>5}  {line[:2000]}" for i, line in enumerate(chunk, start + 1))
@@ -95,7 +95,7 @@ def register(reg: ToolRegistry) -> None:
                 raise ToolError("User declined overwriting the existing file.")
             backup.snapshot(ctx.workspace, p, "overwrite")
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content)
+        p.write_text(content, encoding="utf-8")
         return f"Wrote {len(content)} chars to {path}"
 
     @t("append_file", "Append text to the end of a file (creates it if missing). "
@@ -104,7 +104,7 @@ def register(reg: ToolRegistry) -> None:
     def append_file(ctx: ToolContext, path: str, content: str):
         p = wpath(ctx, path)
         p.parent.mkdir(parents=True, exist_ok=True)
-        with p.open("a") as f:
+        with p.open("a", encoding="utf-8") as f:
             f.write(content)
         return f"Appended {len(content)} chars to {path}"
 
@@ -124,7 +124,7 @@ def register(reg: ToolRegistry) -> None:
         if n > 1 and not replace_all:
             raise ToolError(f"old_text appears {n} times; add more context or set replace_all.")
         backup.snapshot(ctx.workspace, p, "edit")
-        p.write_text(text.replace(old_text, new_text) if replace_all else text.replace(old_text, new_text, 1))
+        p.write_text(text.replace(old_text, new_text) if replace_all else text.replace(old_text, new_text, 1), encoding="utf-8")
         return f"Edited {path} ({n if replace_all else 1} replacement(s))"
 
     @t("list_dir", "List files and folders in one workspace directory (non-recursive).",
@@ -191,7 +191,7 @@ def register(reg: ToolRegistry) -> None:
             if not fnmatch.fnmatch(os.path.basename(full), glob) or is_binary(full):
                 continue
             try:
-                with open(full, errors="replace") as fh:
+                with open(full, errors="replace", encoding="utf-8") as fh:
                     for i, line in enumerate(fh, 1):
                         if rx.search(line):
                             out.append(f"{os.path.relpath(full, root)}:{i}: {line.rstrip()[:300]}")
@@ -213,7 +213,7 @@ def register(reg: ToolRegistry) -> None:
         if p.is_file():
             info["binary"] = is_binary(p)
             if not info["binary"]:
-                with p.open(errors="replace") as f:
+                with p.open(errors="replace", encoding="utf-8") as f:
                     info["lines"] = sum(1 for _ in f)
         else:
             info["entries"] = sum(1 for _ in p.iterdir())

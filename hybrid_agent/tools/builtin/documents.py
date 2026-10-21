@@ -94,7 +94,7 @@ def _load_index(path) -> dict:
     hit = _CACHE.get(str(path))
     if hit and hit[0] == mtime:
         return hit[1]
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     _CACHE[str(path)] = (mtime, data)
     return data
 
@@ -118,7 +118,7 @@ def register(reg: ToolRegistry) -> None:
                 continue
             files += 1
             rel = os.path.relpath(full, ws)
-            with open(full, errors="replace") as f:
+            with open(full, errors="replace", encoding="utf-8") as f:
                 for line, chunk in chunk_text(f.read()):
                     toks = tokenize(chunk)
                     docs.append({"file": rel, "line": line, "text": chunk, "len": len(toks),
@@ -126,7 +126,7 @@ def register(reg: ToolRegistry) -> None:
         with FILE_LOCK:
             p = _index_path(ctx)
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(json.dumps({"built": time.strftime("%Y-%m-%d %H:%M"), "chunks": docs}))
+            p.write_text(json.dumps({"built": time.strftime("%Y-%m-%d %H:%M"), "chunks": docs}), encoding="utf-8")
         return f"Indexed {files} files into {len(docs)} chunks."
 
     @t("search_documents", "Search the indexed workspace documents for passages relevant to a "

@@ -4,17 +4,18 @@ Tools: wikipedia_search, wikipedia_summary, arxiv_search, weather, define_word, 
 
 Services used (all free, keyless, rate-limited for fair use):
   Wikipedia REST + Action API   https://en.wikipedia.org
-  arXiv export API              http://export.arxiv.org/api/query
+  arXiv export API              https://export.arxiv.org/api/query
   Open-Meteo forecast+geocoding https://open-meteo.com
   Free Dictionary API           https://dictionaryapi.dev
 """
 from __future__ import annotations
 
+import re
 import urllib.parse
 
 from ...security.xmlsafe import safe_xml_fromstring
 from ..registry import S, ToolContext, ToolError, ToolRegistry
-from .web import html_to_text, http_get_json, http_get_text
+from .web import RateLimited, html_to_text, http_get_json, http_get_text, search_marginalia, search_wikipedia
 
 CATEGORY = "knowledge"
 ATOM = "{http://www.w3.org/2005/Atom}"
@@ -54,24 +55,31 @@ def register(reg: ToolRegistry) -> None:
     @t("wikipedia_search", "Search Wikipedia article titles. Then use wikipedia_summary or fetch_url.",
        S(query="string", lang="string?|Language code, default 'en'", limit="integer?|Default 8"))
     def wikipedia_search(ctx: ToolContext, query: str, lang: str = "en", limit: int = 8):
-        url = f"https://{lang}.wikipedia.org/w/api.php?" + urllib.parse.urlencode(
-            {"action": "query", "list": "search", "srsearch": query, "srlimit": limit, "format": "json"})
-        hits = http_get_json(url).get("query", {}).get("search", [])
-        return "\n".join(f"- {h['title']}: {html_to_text(h.get('snippet', ''))}" for h in hits) or "No results."
+        try:
+            rows = search_wikipedia(query, limit, lang)
+        except RateLimited:           # Wikipedia's API is busy: find articles via a public search engine instead
+            rows = [r for r in search_marginalia(f"{query} site:{lang}.wikipedia.org", limit * 2)
+                    if f"{lang}.wikipedia.org/wiki/" in r[1]][:limit]
+        return "\n".join(f"- {t}: {s}  ({u})" for t, u, s in rows) or "No results."
 
     @t("wikipedia_summary", "Get the introduction of a Wikipedia article by exact title.",
        S(title="string", lang="string?|Language code, default 'en'"))
     def wikipedia_summary(ctx: ToolContext, title: str, lang: str = "en"):
-        url = (f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/"
-               + urllib.parse.quote(title.replace(" ", "_")))
-        d = http_get_json(url)
+        page = urllib.parse.quote(title.replace(" ", "_"))
+        try:
+            d = http_get_json(f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{page}")
+        except RateLimited:           # API busy: read the article page itself (an ordinary page view)
+            _, body = http_get_text(f"https://{lang}.wikipedia.org/wiki/{page}")
+            paras = [html_to_text(p) for p in re.findall(r"<p>(.*?)</p>", body, re.DOTALL)]
+            intro = "\n\n".join(p for p in paras if len(p) > 80)[:2500]
+            return f"{title}\n\n{intro}\n\nhttps://{lang}.wikipedia.org/wiki/{page}"
         return f"{d.get('title')}\n{d.get('description', '')}\n\n{d.get('extract', '')}\n\n" \
                f"{d.get('content_urls', {}).get('desktop', {}).get('page', '')}"
 
     @t("arxiv_search", "Search arXiv for scientific papers (title, authors, date, abstract, link).",
        S(query="string", max_results="integer?|Default 5"))
     def arxiv_search(ctx: ToolContext, query: str, max_results: int = 5):
-        url = "http://export.arxiv.org/api/query?" + urllib.parse.urlencode(
+        url = "https://export.arxiv.org/api/query?" + urllib.parse.urlencode(
             {"search_query": f"all:{query}", "max_results": max_results, "sortBy": "relevance"})
         _, body = http_get_text(url)
         root = safe_xml_fromstring(body)

@@ -74,7 +74,8 @@ _LIMITER = (
 
 
 def _limiter_prefix(limits: Limits) -> list[str]:
-    return [sys.executable, "-I", "-S", "-c", _LIMITER, str(limits.cpu_seconds),
+    from ..core.pyexe import internal_command
+    return [*internal_command(), "-I", "-S", "-c", _LIMITER, str(limits.cpu_seconds),
             str(limits.memory_mb * 1024 * 1024), str(limits.file_mb * 1024 * 1024), str(limits.open_files), "0"]
 
 

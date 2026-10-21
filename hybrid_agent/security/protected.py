@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from pathlib import Path
 
 PKG_DIR = Path(__file__).resolve().parent.parent          # hybrid_agent/
@@ -35,8 +36,15 @@ USER = [".ssh", ".gnupg", ".aws", ".azure", ".config/gcloud", ".kube", ".docker"
 
 
 def agent_paths(extra: list[Path] | None = None) -> list[Path]:
-    """The agent's own critical files (code, config, personas, audit log)."""
+    """The agent's own critical files: code, config, and (portable mode) the home folder's
+    settings, task queue, model engine and model files. The home's workspace is NOT protected."""
     out = [PKG_DIR, PROJECT_DIR / ".env", PROJECT_DIR / "pyproject.toml"]
+    if getattr(sys, "frozen", False):          # the packaged app: HybridAgent.exe and its _internal folder
+        exe = Path(sys.executable).resolve()
+        out += [exe, exe.parent / "_internal", exe.parent / "MANIFEST.sha256"]
+    home = os.environ.get("HYBRID_AGENT_HOME")
+    if home:
+        out += [Path(home) / n for n in ("settings.env", "tasks", "runtime", "models")]
     return [p.resolve() for p in out + list(extra or [])]
 
 

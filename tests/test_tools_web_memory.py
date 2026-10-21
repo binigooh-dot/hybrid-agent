@@ -57,7 +57,7 @@ class WebToolTests(ToolTestCase, unittest.TestCase):
 
     def test_download_http_check(self):
         self.ok("download_file", url=self.url + "/data.json", path="d/data.json")
-        self.assertEqual(json.loads((self.ws / "d/data.json").read_text()), {"ok": True})
+        self.assertEqual(json.loads((self.ws / "d/data.json").read_text(encoding="utf-8")), {"ok": True})
         self.assertIn("HTTP 201", self.ok("http_request", url=self.url + "/", method="POST", body="ping"))
         self.assertIn('"status": 200', self.ok("check_url", url=self.url + "/"))
         port = int(self.url.rsplit(":", 1)[1])
@@ -71,6 +71,50 @@ class WebToolTests(ToolTestCase, unittest.TestCase):
         atom = ('<feed xmlns="http://www.w3.org/2005/Atom"><entry><title>P</title>'
                 '<link href="http://x"/><updated>2026</updated></entry></feed>')
         self.assertEqual(parse_feed(atom)[0]["link"], "http://x")
+
+
+class OnlineEtiquetteAndProxyTests(unittest.TestCase):
+    """Behind a proxy, names the computer can't resolve itself still pass the safety checks."""
+
+    def test_proxy_lets_unresolvable_public_names_through(self):
+        import socket
+        from unittest import mock
+
+        from hybrid_agent.core.errors import ToolError
+        from hybrid_agent.security import netguard
+        fail = mock.patch("socket.getaddrinfo", side_effect=socket.gaierror(-2, "no DNS"))
+        with fail, mock.patch.object(netguard, "proxied", return_value=True):
+            netguard.check_url("https://en.wikipedia.org/wiki/Ada_Lovelace")            # allowed: the proxy resolves it
+            for bad in ("http://169.254.169.254/", "http://localhost:11434/", "http://metadata.google.internal/",
+                        "http://printer.local/", "http://10.0.0.1/"):
+                with self.assertRaises(ToolError, msg=bad):
+                    netguard.check_url(bad)
+        with fail, mock.patch.object(netguard, "proxied", return_value=False), self.assertRaises(ToolError):
+            netguard.check_url("https://en.wikipedia.org/")                             # no proxy: must resolve
+
+    def test_user_agent_is_honest_and_has_contact(self):
+        import os
+        from unittest import mock
+
+        from hybrid_agent.tools.builtin.web import user_agent
+        with mock.patch.dict(os.environ, {"AGENT_CONTACT": "me@example.org"}):
+            ua = user_agent()
+        self.assertTrue(ua.startswith("HybridAgent/"))
+        self.assertIn("me@example.org", ua)
+        self.assertNotIn("Mozilla", ua)
+
+    def test_search_falls_back_and_names_the_provider(self):
+        from unittest import mock
+
+        from hybrid_agent.core.errors import ToolError
+        from hybrid_agent.tools.builtin import web
+        reg = make_registry()
+        with mock.patch.object(web, "search_duckduckgo", return_value=[]), \
+                mock.patch.object(web, "search_marginalia", side_effect=ToolError("timeout")), \
+                mock.patch.object(web, "search_wikipedia", return_value=[("Ada", "https://w/Ada", "maths")]):
+            out = reg.execute(ToolCall("1", "web_search", {"query": "ada"})).content
+        self.assertIn("results from Wikipedia", out)
+        self.assertIn("https://w/Ada", out)
 
 
 class MemoryAndDocsTests(ToolTestCase, unittest.TestCase):

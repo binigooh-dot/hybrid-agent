@@ -31,7 +31,7 @@ def main() -> int:
     for junk in ROOT.glob("hybrid_agent/**/__pycache__"):
         shutil.rmtree(junk, ignore_errors=True)
     manifest = write_manifest(ROOT / "hybrid_agent")
-    print(f"manifest: {len(manifest.read_text().splitlines())} files")
+    print(f"manifest: {len(manifest.read_text(encoding='utf-8').splitlines())} files")
     try:
         subprocess.run([sys.executable, "-m", "build", "--outdir", str(dist), str(ROOT)], check=True)
     finally:
@@ -40,7 +40,7 @@ def main() -> int:
         for egg in ROOT.glob("*.egg-info"):
             shutil.rmtree(egg, ignore_errors=True)
     sums = "".join(f"{hashlib.sha256(f.read_bytes()).hexdigest()}  {f.name}\n" for f in sorted(dist.iterdir()))
-    (dist / "SHA256SUMS").write_text(sums)
+    (dist / "SHA256SUMS").write_text(sums, encoding="utf-8")
     print(f"\nhybrid-agent {__version__} built:\n{sums}")
     return 0
 

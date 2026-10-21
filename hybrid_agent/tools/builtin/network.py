@@ -16,7 +16,7 @@ import urllib.request
 
 from ...security import netguard
 from ..registry import S, ToolContext, ToolError, ToolRegistry
-from .web import UA
+from .web import user_agent
 
 CATEGORY = "network"
 
@@ -37,7 +37,7 @@ def register(reg: ToolRegistry) -> None:
                                                 f"{method} request may change remote data"):
             raise ToolError("User declined the request.")
         req = urllib.request.Request(url, method=method, data=body.encode() if body else None,
-                                     headers={"User-Agent": UA, **(headers or {})})
+                                     headers={"User-Agent": user_agent(), **(headers or {})})
         try:
             with netguard.opener("local").open(req, timeout=30) as r:
                 status, hdrs, data = r.status, dict(r.headers), r.read(1_000_000)
@@ -59,7 +59,7 @@ def register(reg: ToolRegistry) -> None:
     def check_url(ctx: ToolContext, url: str):
         netguard.check_url(url, "local")
         start = time.monotonic()
-        req = urllib.request.Request(url, method="GET", headers={"User-Agent": UA})
+        req = urllib.request.Request(url, method="GET", headers={"User-Agent": user_agent()})
         try:
             with netguard.opener("local").open(req, timeout=20) as r:
                 return {"status": r.status, "final_url": r.url,

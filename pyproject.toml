@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hybrid-agent"
-version = "1.0.0"
+version = "1.1.0"
 description = "Tool-using agent (80 tools) and a council of persona agents that run on local models with no API key, with optional Claude, a sandbox and a local web GUI."
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = ["tzdata; sys_platform == 'win32'"]   # Windows has no time-zone database of its own
 classifiers = ["Programming Language :: Python :: 3", "Operating System :: OS Independent",
                "Environment :: Web Environment", "Topic :: Scientific/Engineering :: Artificial Intelligence"]
 
@@ -17,6 +17,7 @@ claude = ["anthropic>=1.0"]
 
 [project.scripts]
 hybrid-agent = "hybrid_agent.cli.main:main"
+hybrid-agent-studio = "hybrid_agent.app:main"
 
 [tool.setuptools.packages.find]
 include = ["hybrid_agent*"]

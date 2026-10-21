@@ -1,5 +1,9 @@
 # 02 · Setting up the local model
 
+> **Using the desktop app?** You don't need any of the manual steps below. Open the **Control** tab, press
+> *Install engine*, then *Download* a model. Both land in the app's own `home/` folder ([docs/08](08_DESKTOP_APP.md)).
+> This page is for running from source or using a model server you installed yourself.
+
 The agent talks to a **local model server** over HTTP. You only need one of these:
 
 ```

@@ -76,7 +76,7 @@ class ContextTrimTests(unittest.TestCase):
 
     def test_old_tool_output_is_shortened_for_local_models(self):
         tmp = tempfile.mkdtemp()
-        (Path(tmp) / "big.txt").write_text("x" * 3000 + "\n")
+        (Path(tmp) / "big.txt").write_text("x" * 3000 + "\n", encoding="utf-8")
         calls = [Message(role="assistant", tool_calls=[ToolCall(str(i), "read_file", {"path": "big.txt", "limit": 1})])
                  for i in range(8)]
         reg = make_registry(tmp)
@@ -108,7 +108,7 @@ class ConfigTests(unittest.TestCase):
 
     def test_dotenv_inline_comments(self):
         f = Path(tempfile.mkdtemp()) / ".env"
-        f.write_text('HA_T1=ollama   # comment\nHA_T2="a # b"\n# HA_T3=x\n')
+        f.write_text('HA_T1=ollama   # comment\nHA_T2="a # b"\n# HA_T3=x\n', encoding="utf-8")
         load_dotenv(f)
         self.assertEqual((os.environ.pop("HA_T1"), os.environ.pop("HA_T2")), ("ollama", "a # b"))
         self.assertNotIn("HA_T3", os.environ)
@@ -137,3 +137,43 @@ class SafetyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PortabilityTests(unittest.TestCase):
+    """Windows reads files in the old regional code page unless told otherwise: always say UTF-8."""
+
+    def test_every_text_file_operation_names_its_encoding(self):
+        import ast
+        root = Path(__file__).resolve().parent.parent / "hybrid_agent"
+        missing = []
+        for f in root.rglob("*.py"):
+            for n in ast.walk(ast.parse(f.read_text(encoding="utf-8"))):
+                if not isinstance(n, ast.Call) or any(k.arg == "encoding" for k in n.keywords):
+                    continue
+                name = getattr(n.func, "attr", getattr(n.func, "id", ""))
+                if name in ("read_text", "write_text"):
+                    missing.append(f"{f.relative_to(root)}:{n.lineno}")
+                elif name == "open":
+                    if isinstance(n.func, ast.Attribute) and getattr(n.func.value, "id", "") in {"tarfile", "zipfile", "gzip", "zstd", "os", "webbrowser"}:
+                        continue                               # archives / OS handles: binary or not text files
+                    if isinstance(n.func, ast.Name):            # builtin open(path, mode)
+                        mode = n.args[1] if len(n.args) > 1 else None
+                    elif not n.args:                           # Path.open() = read text
+                        mode = ast.Constant("r")
+                    elif isinstance(n.args[0], ast.Constant) and isinstance(n.args[0].value, str):
+                        mode = n.args[0]                       # Path.open("a")
+                    else:
+                        continue                               # e.g. urllib opener.open(request): not a file
+                    if not (isinstance(mode, ast.Constant) and "b" in str(mode.value)):
+                        missing.append(f"{f.relative_to(root)}:{n.lineno}")
+        self.assertEqual(missing, [])
+
+    def test_internal_python_mode_speaks_utf8(self):
+        import subprocess
+        import sys
+
+        from hybrid_agent.core.pyexe import emulate
+        self.assertEqual(emulate(["-X", "utf8", "-I", "-c", "import sys; sys.exit(3)"]), 3)
+        out = subprocess.run([sys.executable, "-X", "utf8", "-I", "-c", "print('╭─╮ ● é')"], capture_output=True,
+                             check=False).stdout.decode("utf-8")
+        self.assertIn("╭─╮ ● é", out)

@@ -139,5 +139,5 @@ def build() -> str:
 
 
 if __name__ == "__main__":
-    (ROOT / "docs" / "04_TOOLS.md").write_text(build())
+    (ROOT / "docs" / "04_TOOLS.md").write_text(build(), encoding="utf-8")
     print("wrote docs/04_TOOLS.md")

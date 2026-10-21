@@ -19,5 +19,5 @@ from hybrid_agent.gui.guide import build_guide_html
 if __name__ == "__main__":
     cfg = Config(log_dir=ROOT / "logs", persona_dir=ROOT / "personas")
     out = ROOT / "docs" / "agent_builder_suite.html"
-    out.write_text(build_guide_html(cfg=cfg))
+    out.write_text(build_guide_html(cfg=cfg), encoding="utf-8")
     print(f"wrote {out.relative_to(ROOT)} ({out.stat().st_size // 1024} KB)")

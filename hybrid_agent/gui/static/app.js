@@ -6,7 +6,9 @@ const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const TOKEN = new URLSearchParams(location.search).get("token") || "";
 const S = { meta: null, personas: {}, tools: [], picked: [], chair: "", protocol: "debate", job: null, stage: {},
-            chatPersona: "", turn: null, modalId: null, editing: null, editorExpr: "speaking", draftFace: {} };
+            chatPersona: "", turn: null, modalId: null, editing: null, editorExpr: "speaking", draftFace: {},
+            tasks: { tasks: [], runs: [], scheduler: {}, running: null }, taskEdit: null, taskKind: "agent", control: null,
+            safetyLevel: "", runningTask: "" };
 const REDUCED = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 // ------------------------------------------------------------------ helpers
@@ -60,6 +62,12 @@ function personaFace(id, expr, size) {
   const p = S.personas[id];
   return p ? face(p.faces, expr, size, p.face.color) : el("pre", { class: `ascii ${size}`, text: "\n\n   ( ? )\n\n" });
 }
+// The model engine gets a little face too (a server box): it thinks while downloading.
+const FACE_ENGINE = { neutral: ["  ▄▄▄▄▄▄▄▄▄▄▄   \n  ┌─────────┐   \n  │ ▪ ▪ ▪ ▪ │   \n  ├─────────┤   \n  │ ●  ───  │   \n  ├─────────┤   \n  └─────────┘   "] };
+FACE_ENGINE.happy = [FACE_ENGINE.neutral[0].replace("●", "◉")];
+FACE_ENGINE.concerned = [FACE_ENGINE.neutral[0].replace("●", "○").replace("▪ ▪ ▪ ▪", "      ")];
+FACE_ENGINE.thinking = ["▪ ▪ ▪ ▪", "▪▪ ▪ ▪ ", "▪ ▪▪ ▪ ", "▪ ▪ ▪▪ "].map((l) => FACE_ENGINE.neutral[0].replace("▪ ▪ ▪ ▪", l).replace("●", "◉"));
+FACE_ENGINE.blink = FACE_ENGINE.neutral;
 function idleExpr(id) { return S.personas[id]?.role === "skeptic" ? "skeptical" : "neutral"; }
 setInterval(() => {
   const now = Date.now();
@@ -82,6 +90,8 @@ function showTab(name) {
   $$(".tabs button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === name)));
   $$(".tab").forEach((s) => s.classList.toggle("active", s.id === `tab-${name}`));
   if (name === "safety") loadSafety();
+  if (name === "tasks") loadTasks();
+  if (name === "control") loadControl();
   try { sessionStorage.setItem("tab", name); } catch { /* storage may be blocked */ }
 }
 $$(".tabs button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
@@ -96,7 +106,8 @@ try { const t = localStorage.getItem("theme"); if (t) document.documentElement.d
 function setBusy(job) {
   S.job = job;
   $("#busy").classList.toggle("hidden", !job);
-  if (job) $("#busy-label").textContent = { council: "Council deliberating…", chat: "Agent working…", diagnose: "Running drills…" }[job.kind] || "Working…";
+  if (job) $("#busy-label").textContent = { council: "Council deliberating…", chat: "Agent working…", diagnose: "Running drills…",
+    task: "Running a task…" }[job.kind] || "Working…";
   for (const b of ["#c-run", "#s-run", "#chat-form button"]) $(b).disabled = !!job;
 }
 $("#stop").addEventListener("click", async () => {
@@ -441,7 +452,7 @@ async function loadSafety() {
   $("#s-cards").replaceChildren(...cards.map(([k, v, cls, d]) => el("div", { class: `card ${cls}` },
     el("div", { class: "k", text: k }), el("div", { class: "v", text: v }), el("div", { class: "d", text: d }))));
   const level = s.sandbox === "off" || s.auto_approve || mstate === "changed" ? "bad" : strict ? "ok" : "warn";
-  $("#shield").className = `shield ${level}`;
+  $("#shield").className = `shield ${level}`; S.safetyLevel = level; updateHealth();
   $("#shield").title = { ok: "Fully protected", warn: "Protected (no strict sandbox)", bad: "Reduced protection - see Safety" }[level];
   const box = $("#s-backups");
   if (!s.backups.length) return box.replaceChildren(el("p", { class: "hint", text: "Nothing yet. When the agent changes or deletes a file, a copy lands here." }));
@@ -485,6 +496,243 @@ function renderDrills(rep) {
       el("td", {}, el("div", { text: d.title }), el("div", { class: "hint", text: d.scenario })), el("td", { text: d.severity }), el("td", { text: d.detail }))),
     ...rep.integrity.map((c) => el("tr", {}, pf(c.passed), el("td", { text: `integrity: ${c.name}` }), el("td", { text: "" }), el("td", { text: c.detail })))]);
 }
+
+// ================================================================== TASKS
+const KIND_ICON = { agent: "🤖", council: "👥", diagnose: "🛡" };
+const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const fmtWhen = (iso) => {
+  if (!iso) return "";
+  const d = new Date(iso), today = new Date();
+  const day = d.toDateString() === today.toDateString() ? "today"
+    : d.toDateString() === new Date(Date.now() + 864e5).toDateString() ? "tomorrow" : d.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
+  return `${day} ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+};
+async function loadTasks() {
+  try { S.tasks = await api("GET", "/api/tasks"); } catch (e) { return toast(e.message); }
+  renderTasks();
+}
+function taskState(t) {
+  const q = S.tasks.scheduler.queue || [];
+  if (S.runningTask === t.id) return ["running", "running now"];
+  if (q.includes(t.id)) return ["queued", S.job ? `queued · waits for the current ${S.job.kind}` : "queued"];
+  return [t.last_status || "", t.last_status ? `last run ${fmtWhen(t.last_run)} · ${t.last_status}` : "never run"];
+}
+function renderTasks() {
+  const box = $("#task-list"), { tasks, scheduler, runs } = S.tasks;
+  $("#task-count").textContent = (scheduler.queue || []).length || "";
+  $("#q-state").textContent = scheduler.paused ? "⏸ paused" : `${(scheduler.queue || []).length} waiting`;
+  $("#q-pause").textContent = scheduler.paused ? "Resume queue" : "Pause queue";
+  if (!tasks.length) box.replaceChildren(el("div", { class: "empty" }, "No tasks yet.", el("br"),
+    "Create one: a morning briefing, a weekly research digest, nightly safety drills…"));
+  else box.replaceChildren(...tasks.map((t) => {
+    const [st, label] = taskState(t);
+    const run = el("button", { class: "btn small", type: "button", text: "▶ Run now", onclick: async (ev) => {
+      ev.stopPropagation();
+      try { const r = await api("POST", "/api/tasks/run", { id: t.id }); toast(r.queued ? `Queued “${t.name}”.` : "Already queued."); loadTasks(); }
+      catch (e) { toast(e.message); } } });
+    const row = el("div", { class: `task${t.enabled ? "" : " off"}${S.taskEdit === t.id ? " sel" : ""}`, tabindex: "0", role: "button" },
+      el("div", { class: "ic", text: KIND_ICON[t.kind] || "•" }),
+      el("div", {}, el("div", { class: "nm", text: t.name }),
+        el("div", { class: "meta" }, el("b", { text: t.when }), t.next_run ? ` · next ${fmtWhen(t.next_run)}` : "",
+          t.permission === "safe" ? " · look-don't-touch" : " · asks first")),
+      el("div", { class: "meta", style: "text-align:right" }, el("div", {}, el("span", { class: `st ${st}` }), label), run));
+    row.addEventListener("click", () => editTask(t));
+    row.addEventListener("keydown", (ev) => { if (ev.key === "Enter") editTask(t); });
+    return row;
+  }));
+  const rl = $("#run-list");
+  if (!runs.length) rl.replaceChildren(el("p", { class: "hint", text: "No runs yet." }));
+  else rl.replaceChildren(el("table", {}, el("tr", {}, ...["", "When", "Task", "Took", "Result", ""].map((h) => el("th", { text: h }))),
+    ...runs.map((r) => el("tr", {}, el("td", {}, el("span", { class: `st ${r.status}`, title: r.status })),
+      el("td", { text: fmtWhen(r.started) }), el("td", { text: r.name }), el("td", { text: `${Math.round(r.seconds)}s` }),
+      el("td", { text: short(r.preview.replace(/\s+/g, " "), 110) }),
+      el("td", {}, el("button", { class: "btn small ghost", type: "button", text: "Open", onclick: () => openResult(r) }))))));
+}
+async function openResult(r) {
+  try {
+    const { text } = await api("GET", `/api/tasks/result/${encodeURIComponent(r.result)}`);
+    $("#v-title").textContent = `${r.name} · ${fmtWhen(r.started)}`; $("#v-text").textContent = text;
+    $("#viewer").classList.remove("hidden"); $("#v-close").focus();
+  } catch (e) { toast(e.message); }
+}
+$("#v-close").addEventListener("click", () => $("#viewer").classList.add("hidden"));
+$("#q-pause").addEventListener("click", async () => {
+  try { await api("POST", "/api/tasks/pause", { paused: !S.tasks.scheduler.paused }); loadTasks(); } catch (e) { toast(e.message); }
+});
+function setKind(kind) {
+  S.taskKind = kind;
+  $$("#tk-kind button").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.kind === kind)));
+  $("#tk-prompt-box").classList.toggle("hidden", kind === "diagnose");
+  $("#tk-agent-box").classList.toggle("hidden", kind !== "agent");
+  $("#tk-council-box").classList.toggle("hidden", kind !== "council");
+}
+$$("#tk-kind button").forEach((b) => b.addEventListener("click", () => setKind(b.dataset.kind)));
+function renderSchedFields() {
+  const k = $("#tk-sched").value;
+  $("#tk-at").classList.toggle("hidden", k !== "once");
+  $("#tk-every").classList.toggle("hidden", k !== "interval");
+  $("#tk-time").classList.toggle("hidden", !["daily", "weekly"].includes(k));
+  $("#tk-days").classList.toggle("hidden", k !== "weekly");
+  const sch = formSchedule();
+  const say = { manual: () => "Runs only when you press Run now.",
+    once: () => (sch.at ? `Runs once, ${fmtWhen(sch.at)}.` : "Pick a date and time."),
+    interval: () => `Runs every ${sch.minutes} minutes while the app is open.`, daily: () => `Runs every day at ${sch.time}.`,
+    weekly: () => (sch.days.length ? `Runs ${sch.days.map((d) => DAYS[d]).join(", ")} at ${sch.time}.` : "Pick at least one day.") };
+  $("#tk-next").textContent = say[k]();
+}
+function formSchedule() {
+  const k = $("#tk-sched").value, s = { kind: k };
+  if (k === "once") s.at = $("#tk-at").value;
+  if (k === "interval") s.minutes = +$("#tk-minutes").value || 60;
+  if (k === "daily" || k === "weekly") s.time = $("#tk-time").value || "08:00";
+  if (k === "weekly") s.days = $$("#tk-days .chip").filter((c) => c.getAttribute("aria-pressed") === "true").map((c) => +c.dataset.day);
+  return s;
+}
+$("#tk-days").append(...DAYS.map((d, i) => el("button", { class: "chip", type: "button", "data-day": i, "aria-pressed": String(i < 5), text: d,
+  onclick: (ev) => { const c = ev.currentTarget; c.setAttribute("aria-pressed", String(c.getAttribute("aria-pressed") !== "true")); renderSchedFields(); } })));
+["#tk-sched", "#tk-at", "#tk-minutes", "#tk-time"].forEach((x) => $(x).addEventListener("input", renderSchedFields));
+function renderTaskMembers(selected) {
+  $("#tk-members").replaceChildren(...Object.values(S.personas).map((p) => el("button", { class: "chip", type: "button", "data-id": p.id,
+    "aria-pressed": String(selected.includes(p.id)), text: p.name,
+    onclick: (ev) => { const c = ev.currentTarget; c.setAttribute("aria-pressed", String(c.getAttribute("aria-pressed") !== "true")); } })));
+}
+function editTask(t) {
+  t = t || { name: "", kind: "agent", prompt: "", persona: "", personas: Object.keys(S.personas).slice(0, 3), protocol: "roundtable",
+    profile: "", permission: "safe", schedule: { kind: "manual" }, enabled: true };
+  S.taskEdit = t.id || null;
+  $("#task-heading").textContent = t.id ? `Edit “${t.name}”` : "New task";
+  $("#tk-name").value = t.name; $("#tk-prompt").value = t.prompt || ""; setKind(t.kind);
+  $("#tk-persona").value = t.persona || ""; $("#tk-profile").value = t.profile || ""; $("#tk-protocol").value = t.protocol || "roundtable";
+  renderTaskMembers(t.personas || []);
+  const s = t.schedule || { kind: "manual" };
+  $("#tk-sched").value = s.kind; if (s.at) $("#tk-at").value = s.at.slice(0, 16);
+  if (s.minutes) $("#tk-minutes").value = s.minutes; if (s.time) $("#tk-time").value = s.time;
+  if (s.days) $$("#tk-days .chip").forEach((c) => c.setAttribute("aria-pressed", String(s.days.includes(+c.dataset.day))));
+  $$("input[name=tk-perm]").forEach((r) => { r.checked = r.value === t.permission; });
+  $("#tk-enabled").checked = t.enabled !== false;
+  $("#tk-delete").disabled = !t.id;
+  renderSchedFields(); renderTasks();
+}
+async function saveTask(runAfter) {
+  const body = { id: S.taskEdit || undefined, name: $("#tk-name").value.trim(), kind: S.taskKind, prompt: $("#tk-prompt").value.trim(),
+    persona: $("#tk-persona").value, profile: $("#tk-profile").value, protocol: $("#tk-protocol").value,
+    personas: $$("#tk-members .chip").filter((c) => c.getAttribute("aria-pressed") === "true").map((c) => c.dataset.id),
+    permission: $("input[name=tk-perm]:checked").value, schedule: formSchedule(), enabled: $("#tk-enabled").checked };
+  try {
+    const t = await api("POST", "/api/tasks", body);
+    S.taskEdit = t.id;
+    if (runAfter) await api("POST", "/api/tasks/run", { id: t.id });
+    toast(runAfter ? `Saved and queued “${t.name}”.` : `Saved “${t.name}”.`);
+    await loadTasks(); editTask(S.tasks.tasks.find((x) => x.id === t.id));
+  } catch (e) { toast(e.message, 5000); }
+}
+$("#task-form").addEventListener("submit", (ev) => { ev.preventDefault(); saveTask(false); });
+$("#tk-save-run").addEventListener("click", () => { if ($("#task-form").reportValidity()) saveTask(true); });
+$("#t-new").addEventListener("click", () => { editTask(null); $("#tk-name").focus(); });
+$("#tk-delete").addEventListener("click", async () => {
+  if (!S.taskEdit || !confirm("Delete this task? (Its past results stay in the history.)")) return;
+  try { await api("DELETE", `/api/tasks/${encodeURIComponent(S.taskEdit)}`); S.taskEdit = null; await loadTasks(); editTask(null); }
+  catch (e) { toast(e.message); }
+});
+
+// ================================================================== CONTROL PANEL
+const gb = (b) => (b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.round(b / 1e6)} MB`);
+async function loadControl() {
+  try { S.control = await api("GET", "/api/control"); } catch (e) { return toast(e.message); }
+  renderControl(); updateHealth();
+}
+function renderControl() {
+  const c = S.control, rt = c.runtime, t = rt.task && rt.task.kind && !rt.task.finished ? rt.task : null;
+  const state = !rt.installed ? ["Not installed", "concerned"] : rt.running ? ["Running", "happy"] : ["Stopped", "neutral"];
+  $("#eng-state").textContent = t ? (t.kind === "install" ? "Installing…" : `Downloading ${t.name}…`) : state[0];
+  const engFace = face(FACE_ENGINE, t ? "thinking" : state[1], "sm"); engFace.id = "eng-face"; $("#eng-face").replaceWith(engFace);
+  $("#eng-detail").textContent = t ? `${t.status}${t.total ? ` · ${gb(t.done)} of ${gb(t.total)}` : ""}`
+    : rt.running ? `Ollama ${rt.version || ""} at ${rt.url}${rt.bundled ? " · from your home folder" : rt.managed ? "" : " · installed on this computer"}${rt.loaded.length ? ` · loaded: ${rt.loaded.join(", ")}` : ""}`
+      : rt.installed ? "Press Start (or let it start with the app)." : `Downloads Ollama (${rt.archive || "for this computer"}) into your home folder. Windows: about 1.6 GB.`;
+  $("#eng-progress").classList.toggle("hidden", !t);
+  if (t) $("#eng-progress div").style.width = `${t.total ? (100 * t.done) / t.total : 5}%`;
+  $("#eng-install").classList.toggle("hidden", rt.installed || !!t);
+  $("#eng-start").classList.toggle("hidden", !rt.installed || rt.running);
+  $("#eng-stop").classList.toggle("hidden", !rt.running);
+  $("#model-active").textContent = `in use: ${c.model}`;
+  const have = new Set(rt.models.map((m) => m.name));
+  $("#model-list").replaceChildren(...(rt.models.length ? rt.models.map((m) => {
+    const active = m.name === c.model || m.name === `${c.model}:latest`;
+    return el("div", { class: `model${active ? " active" : ""}` },
+      el("div", {}, el("div", { class: "nm", text: m.name }), el("div", { class: "meta", text: `${gb(m.size)} · ${active ? "in use" : "installed"}` })),
+      el("div", { class: "actions tight" },
+        active ? el("span", { class: "pill", text: "✓ in use" }) : el("button", { class: "btn small", type: "button", text: "Use", onclick: () => modelAction("use", m.name) }),
+        el("button", { class: "btn small ghost", type: "button", text: "Delete", onclick: () => confirm(`Delete ${m.name} (${gb(m.size)})?`) && modelAction("delete", m.name) })));
+  }) : [el("p", { class: "hint", text: rt.running ? "No models yet - download one below." : "Start the engine to see your models." })]));
+  $("#model-suggest").replaceChildren(...rt.suggested.filter(([n]) => !have.has(n)).map(([n, size, ram, , note]) => el("div", { class: "model" },
+    el("div", {}, el("div", { class: "nm", text: n }), el("div", { class: "meta", text: `${size} download · needs ${ram} RAM · ${note}` })),
+    el("button", { class: "btn small", type: "button", text: "Download", disabled: !rt.running || !!t, onclick: () => modelAction("pull", n) }))));
+  const st = c.settings;
+  $("#set-contact").value = c.contact; $("#set-searx").value = c.searxng;
+  $("#set-sandbox").value = st.AGENT_SANDBOX || S.meta.sandbox || "auto"; $("#set-disk").value = st.AGENT_MIN_FREE_MB || 1024;
+  $("#set-safe").checked = ["1", "true", "yes", "on"].includes(String(st.AGENT_SAFE_MODE || S.meta.safe_mode).toLowerCase());
+  $("#set-autostart").checked = !["0", "false", "no", "off"].includes(String(st.AGENT_AUTO_START_MODEL || "1").toLowerCase());
+  const kv = [["Home folder", c.home || "(developer mode: settings come from .env)"], ["Model engine", gb(c.disk.engine_bytes)],
+    ["Models", gb(c.disk.models_bytes)], ["Free disk", `${c.free_gb} GB`]];
+  $("#storage").replaceChildren(...kv.flatMap(([k, v]) => [el("dt", { text: k }), el("dd", { text: v })]));
+}
+async function modelAction(action, name) {
+  try { S.control = await api("POST", "/api/models", { action, name }); renderControl(); updateHealth();
+    if (action === "use") { toast(`Agents now use ${name}.`); S.meta = await api("GET", "/api/meta"); } }
+  catch (e) { toast(e.message, 5000); }
+}
+async function engine(action) {
+  try { const r = await api("POST", "/api/runtime", { action }); toast(`Engine: ${r.result}`); loadControl(); }
+  catch (e) { toast(e.message, 6000); }
+}
+$("#eng-install").addEventListener("click", () => confirm("Download the Ollama model engine from ollama.com into your home folder? (about 1.6 GB on Windows)") && engine("install"));
+$("#eng-start").addEventListener("click", () => engine("start"));
+$("#eng-stop").addEventListener("click", () => engine("stop"));
+$("#model-pull").addEventListener("click", () => { const n = $("#model-name").value.trim(); if (n) modelAction("pull", n); });
+$("#online-run").addEventListener("click", async () => {
+  const box = $("#online-list"); box.replaceChildren(el("p", { class: "hint", text: "Checking… (a few seconds)" }));
+  $("#online-run").disabled = true;
+  try {
+    const rows = await api("GET", "/api/online");
+    box.replaceChildren(...rows.map((r) => el("div", { class: "check-row" }, el("span", { class: r.ok ? "ok" : "no", text: r.ok ? "✓" : "✕" }),
+      el("span", { text: r.check }), el("span", { class: "d", text: r.detail, title: r.detail }), el("span", { class: "hint", text: `${r.ms} ms` }))));
+    const okN = rows.filter((r) => r.ok).length;
+    toast(okN === rows.length ? "Online: every check passed." : `${okN}/${rows.length} online checks passed - see the details.`);
+  } catch (e) { box.replaceChildren(el("p", { class: "hint", text: e.message })); }
+  $("#online-run").disabled = false;
+});
+$("#settings-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const changes = { AGENT_CONTACT: $("#set-contact").value.trim(), SEARXNG_URL: $("#set-searx").value.trim(),
+    AGENT_SANDBOX: $("#set-sandbox").value, AGENT_MIN_FREE_MB: String(+$("#set-disk").value || 1024),
+    AGENT_SAFE_MODE: $("#set-safe").checked ? "1" : "0", AGENT_AUTO_START_MODEL: $("#set-autostart").checked ? "1" : "0" };
+  try { S.control = await api("POST", "/api/settings", { changes }); renderControl(); toast("Settings saved."); loadSafety(); }
+  catch (e) { toast(e.message, 5000); }
+});
+$("#quit").addEventListener("click", async () => {
+  if (!confirm("Quit Hybrid Agent? This stops the GUI, the task scheduler and the model engine.")) return;
+  try { await api("POST", "/api/quit", {}); } catch { /* the server is going away */ }
+  document.body.replaceChildren(el("main", {}, el("div", { class: "empty", style: "margin-top:20vh" }, "Hybrid Agent has stopped.", el("br"),
+    "Start it again from HybridAgent.exe (or hybrid-agent studio).")));
+});
+// One "is everything OK?" signal for the top bar (research: lead with the answer, details on demand).
+function updateHealth() {
+  const c = S.control, h = $("#health");
+  let level = "ok", text = "Ready";
+  if (S.meta && /scripted/.test(S.meta.backend)) { level = "warn"; text = "Demo mode (scripted replies)"; }
+  else if (c && c.backend_mode !== "claude") {
+    const rt = c.runtime, have = rt.models.some((m) => m.name === c.model || m.name === `${c.model}:latest`);
+    if (!rt.running) { level = "bad"; text = rt.installed ? "Model engine stopped" : "No model engine yet"; }
+    else if (!have) { level = "warn"; text = `Model ${c.model} not downloaded`; }
+    else text = `Ready · ${c.model}`;
+  }
+  if (level === "ok" && S.safetyLevel === "bad") { level = "warn"; text += " · check Safety"; }
+  h.className = `health ${level}`; $("#health-text").textContent = text;
+  $("#banner").classList.toggle("hidden", level !== "bad" || S.bannerDismissed);
+  $("#banner-text").textContent = text + ".";
+}
+$("#health").addEventListener("click", () => showTab("control"));
+$("#banner-go").addEventListener("click", () => { showTab("control"); $("#banner").classList.add("hidden"); });
 
 // ================================================================== APPROVAL / QUESTION DIALOG
 const VERBS = { run_shell: ["run a command", "command"], run_python: ["run Python code", "code"], run_tests: ["run tests", "path"],
@@ -538,15 +786,18 @@ function onEvent(e) {
       if (e.kind === "council") onCouncilDone(e.result);
       if (e.kind === "chat") endTurn(e.result.answer);
       if (e.kind === "diagnose") renderDrills(e.result);
+      if (e.kind === "task") { S.runningTask = ""; toast(`Task “${e.result.name}” finished.`); loadTasks(); }
       break;
     case "job_error":
       setBusy(null); toast(e.error, 6000);
       if (e.kind === "chat") endTurn(`Error: ${e.error}`, true);
       if (e.kind === "council") feedSys(`Error: ${e.error}`, true);
+      if (e.kind === "task") { S.runningTask = ""; loadTasks(); }
       break;
     case "job_cancelled":
       setBusy(null); toast("Stopped.");
       if (e.kind === "chat") endTurn("(stopped)", true);
+      if (e.kind === "task") { S.runningTask = ""; loadTasks(); }
       if (e.kind === "council") { feedSys("Stopped."); for (const x of Object.values(S.stage)) setExpr(x.pre, "neutral"); }
       break;
     case "council_setup": buildStage(e.members, e.chair, e.question); break;
@@ -556,13 +807,19 @@ function onEvent(e) {
     case "approval_request": case "question": openModal(e); break;
     case "request_expired": if (S.modalId === e.request_id) closeModal(); break;
     case "restored": if ($("#tab-safety").classList.contains("active")) loadSafety(); break;
+    case "tasks_changed": loadTasks(); break;
+    case "task_started": S.runningTask = e.task; renderTasks(); break;
+    case "runtime_progress":
+      if (S.control) { S.control.runtime.task = e; renderControl(); }
+      if (e.finished) { toast(e.error ? `${e.kind} failed: ${e.status}` : `${e.kind === "install" ? "Engine installed" : `${e.name} downloaded`}.`, 5000); loadControl(); }
+      break;
   }
 }
 function connectEvents() {
   const es = new EventSource(`/api/events?token=${encodeURIComponent(TOKEN)}`);
   es.onmessage = (m) => { try { onEvent(JSON.parse(m.data)); } catch (err) { console.warn(err); } };
-  es.onerror = () => { $("#status").textContent = "reconnecting…"; };
-  es.onopen = () => { if (S.meta) $("#status").textContent = S.meta.backend; };
+  es.onerror = () => { $("#health").className = "health warn"; $("#health-text").textContent = "reconnecting…"; };
+  es.onopen = () => { if (S.control) updateHealth(); };
 }
 
 // ================================================================== BOOT
@@ -576,31 +833,22 @@ async function loadPersonas() {
   cp.replaceChildren(el("option", { value: "", text: "Agent (no persona)" }),
     ...list.map((p) => el("option", { value: p.id, text: `${p.name} — ${p.title}` })));
   cp.value = S.personas[cur] ? cur : ""; S.chatPersona = cp.value; chatHeader();
+  $("#tk-persona").replaceChildren(el("option", { value: "", text: "no persona" }), ...list.map((p) => el("option", { value: p.id, text: p.name })));
   editPersona(S.editing && S.personas[S.editing] ? S.editing : list[0]?.id);
 }
-async function firstRunCheck() {   // a friendly banner when no model is reachable yet
-  const b = S.meta.backend;
-  if (/scripted|claude/i.test(b)) return;
-  try {
-    const { fails } = await runDoctor();
-    const missing = fails.filter((r) => /Local (server|model)/.test(r.check));
-    if (!missing.length) return;
-    $("#banner-text").textContent = missing[0].detail;
-    $("#banner-pull").textContent = `ollama pull ${b.split(":").slice(1).join(":") || "qwen2.5:7b"}`;
-    $("#banner").classList.remove("hidden");
-  } catch { /* the Safety tab's "Check setup" shows details */ }
-}
-$("#banner-close").addEventListener("click", () => $("#banner").classList.add("hidden"));
+$("#banner-close").addEventListener("click", () => { S.bannerDismissed = true; $("#banner").classList.add("hidden"); });
 
 async function boot() {
   if (!TOKEN) { document.body.textContent = "Open the link with ?token= printed in the terminal."; return; }
   $("#guide-link").href = `/guide?token=${encodeURIComponent(TOKEN)}`;
-  try { S.meta = await api("GET", "/api/meta"); } catch (e) { $("#status").textContent = e.message; return; }
-  $("#status").textContent = S.meta.backend; $("#status").title = `Model · workspace: ${S.meta.workspace}`;
+  try { S.meta = await api("GET", "/api/meta"); } catch (e) { $("#health-text").textContent = e.message; return; }
+  $("#health").title = `Model: ${S.meta.backend} · workspace: ${S.meta.workspace} · click for the Control panel`;
   const opts = (xs) => xs.map((x) => el("option", { value: x, text: x }));
   $("#p-role").replaceChildren(...Object.entries(S.meta.roles).map(([k, r]) => el("option", { value: k, text: r.title })));
   $("#chat-profile").replaceChildren(el("option", { value: "", text: "automatic" }), ...opts(S.meta.profiles));
   $("#p-tools").replaceChildren(el("option", { value: "", text: "role default" }), ...opts(S.meta.profiles));
+  $("#tk-profile").replaceChildren(el("option", { value: "", text: "automatic" }), ...opts(S.meta.profiles));
+  $("#tk-protocol").replaceChildren(...Object.keys(S.meta.protocols).map((k) => el("option", { value: k, text: PROTOCOLS[k]?.[0] || k })));
   $("#t-profile").append(...opts(S.meta.profiles));
   for (const k of PARTS) $(`#f-${k}`).replaceChildren(...opts(S.meta.face_parts[k]));
   $("#p-expr").replaceChildren(...S.meta.expressions.map((ex) => el("button", { class: "chip", type: "button", text: ex,
@@ -613,6 +861,6 @@ async function boot() {
   if (S.meta.auto_approve) toast("Auto-approve is ON (-y): risky tools will run without asking.", 6000);
   try { const t = sessionStorage.getItem("tab"); if (t) showTab(t); } catch { /* ignore */ }
   connectEvents();
-  loadSafety(); firstRunCheck();
+  loadSafety(); loadControl(); loadTasks().then(() => editTask(null));
 }
 boot();

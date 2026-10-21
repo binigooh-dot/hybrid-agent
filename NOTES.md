@@ -4,6 +4,115 @@ A log of what was built, the decisions behind it, and how it was checked. Newest
 
 ---
 
+## Session 5: desktop app (.exe), control panel, task scheduler, going online, crisper faces - v1.1.0
+
+**Request:** a self-hosted .exe suite for the GUI and a control panel, where all files and a local model live
+together, and where tasks can be queued or scheduled for agents. It should be online so agents can reach sites
+like Wikipedia (explain first if that doesn't work). Also research and refine the GUI, and make the faces
+crisper and tighter.
+
+### 0. Online check first (as asked)
+
+The first live test **failed**. This cloud workspace's network refused Wikipedia and DuckDuckGo. That was
+explained before continuing, and the user widened the network setting. It also exposed a real weakness:
+the web tools did their own DNS lookup as a safety check, so on networks where only a proxy can resolve names,
+nothing worked.
+
+| Found live | Fix |
+|---|---|
+| Proxy-only networks: every site "can't resolve" | `netguard`: if the URL goes through a configured proxy (env or OS settings) and the name can't be resolved locally, the proxy resolves it. Names are still checked: IP literals, `localhost`, `*.internal`, `*.local`, metadata hosts |
+| Wikipedia API: HTTP 429 | Honest Wikimedia-style User-Agent with your contact (`AGENT_CONTACT`; identified bots get 200 requests/min, unidentified ones 10). Retry-After honoured. If the API is busy, read the article page or find articles via a public search engine |
+| DuckDuckGo refuses honest programs (HTTP 202) | Search chain SearXNG → DuckDuckGo → Marginalia (a free API made for programs) → Wikipedia, naming the provider that answered. **Never** pretend to be a browser. Bing's RSS works but its terms forbid this use, so it isn't used |
+| arXiv used `http://` | https |
+| Intermittent TLS handshake timeouts | One retry for network blips; search providers capped at 10 s |
+
+Verified live: Wikipedia, web search, weather, arXiv, RSS feeds, link extraction.
+
+### 1. Portable home folder (`core/home.py`)
+
+One folder next to the app holds `settings.env`, `workspace/`, `personas/`, `logs/`, `tasks/`, `models/` and
+`runtime/`. Settings, tasks, the engine and models are added to the protected paths. The Control panel can
+edit a fixed list of settings; auto-approve and "sandbox off" are deliberately not editable from the browser.
+
+### 2. Task queue + scheduler (`tasks/`)
+
+Schedules: manual, once, every N minutes, daily, weekdays. One task runs at a time, waiting while you chat.
+Missed runs run once at startup. Full run history; each result is saved as Markdown.
+
+**Unattended safety:** the default permission is *look, don't touch* (read and network tools only).
+*Ask me first* uses the normal approvals, and nobody answering means Deny. Tests cover schedule maths,
+persistence and corruption, the one-at-a-time rule, pause, history, path-safe result reading, the safe
+permission and the HTTP API.
+
+Bug found by a test: `due()` compared against a clock with the microseconds cut off, so a task due at
+09:00:00.4 waited for the next poll. Fixed.
+
+### 3. Control panel + model engine (`runtime/ollama.py`)
+
+Install Ollama from ollama.com **into the home folder** (Windows zip ≈1.6 GB, Linux `.tar.zst`), start and
+stop it (127.0.0.1 only), and pull, switch or delete models (stored in `home/models` via `OLLAMA_MODELS`).
+Progress streams to the GUI. Zip-slip protection on the engine archive. Online check, settings, storage and Quit.
+
+**End-to-end, for real:** the engine downloaded from ollama.com, started, and pulled `qwen2.5:1.5b` (986 MB).
+A queued task ran through the scheduler on that local model, called `wikipedia_summary` against live
+Wikipedia, and answered "Ada Lovelace was born in 1815" in 31 s on CPU. The packaged Linux app then did the
+same with a scheduled weather task, re-armed it for the next day, and Quit stopped the GUI, scheduler and engine.
+
+### 4. GUI research and refinement; crisper faces
+
+Research applied:
+- Lead with the one "is everything OK?" signal, with details on demand. Red only for real problems.
+- Schedulers as a list plus detail, with dropdown recurrence, next run and Run now.
+- Box-drawing characters only join up if the font draws them full-height, and fonts differ.
+
+Changes:
+- **Top bar health pill:** *Ready · model* / *Engine stopped* / *Demo mode*. Clicking it opens Control.
+- **Grouped tabs:** Work · Library · System.
+- **New Tasks and Control tabs**, and a first-run banner that points to Control.
+- **Faces redrawn** with box-drawing and block characters:
+  - outlines ╭─╮ ┌─┐ ┏━┓ ╔═╗ and eyes ● ○ ◉ ◕ ■ •;
+  - mouths open as blocks (╶▄╴ ▐█▌), eyes glance (◔), thought dots rise (∙ ° ○);
+  - an engine "face" for the Control tab.
+- **Bundled font:** an 18 KB subset of JetBrains Mono, licence included. It was measured in Chromium at
+  line-heights 1.0 to 1.32 and joins at all of them, so line-height 1 is used. The system font showed gaps.
+- **Font guarantee:** the integrity check and a test ensure every face character is in the font.
+- **Legacy faces:** old ASCII persona files upgrade automatically.
+
+### 5. The .exe (`packaging/`, `scripts/build_exe.py`)
+
+PyInstaller one-folder build with icon and Windows version info. Inside it, `sys.executable` is the app, so a
+hidden `--hybrid-python` mode (`core/pyexe.py`) serves the regex worker, the sandbox limiter and `run_python`.
+`run_python` prefers a real Python installed on the computer.
+
+The **Windows .exe was built on Linux**: official Windows Python 3.12 (nuget) + PyInstaller under Wine 9.
+Testing it under Wine found real Windows bugs, all fixed:
+
+| Found | Fix |
+|---|---|
+| Personas failed to load: Windows reads files in cp1252 by default | `encoding="utf-8"` on every text file operation (an AST rewrite, with its slips caught by tests and mypy), and a test that keeps it that way |
+| No time-zone data on Windows | `tzdata` dependency on Windows, bundled into the exe |
+| Child Pythons printed in cp1252 | `-X utf8` for the regex worker and `run_python`; the built-in Python honours it |
+| A timed-out command left its children running on Windows | `taskkill /F /T` ends the whole tree (verified: 0 processes left) |
+| "Press Enter to close" also fired inside helper processes (they rewrite argv) | Decided before anything runs |
+| Wine 9 lacks `CopyFile2` (Python 3.12 file copies) | Detect Wine and use Python's older copy method. Real Windows is unaffected |
+| A drill copied source files the packaged app doesn't have | It creates decoy files instead |
+
+Results:
+- Linux binary: 39/39 drills and the real-engine end-to-end test.
+- Windows exe under Wine: 39/39 drills, online check 4/4, council, a scheduled task (drills 39/39) and Quit,
+  all driven from a real browser.
+- `.github/workflows/build.yml` runs the tests, drills and builds on **real** Windows, macOS and Linux, and
+  publishes a release when a version tag is pushed.
+
+### 6. Verification
+
+- Tests: 158, all passing. New: `test_tasks.py`, `test_app.py`, plus portability, font, proxy, etiquette and
+  fallback tests.
+- `health_check.py`: 10/10.
+- `.exe` size: 23 MB unpacked, 11 MB zipped (Linux build similar).
+
+---
+
 ## Session 4: hard safety, ASCII faces, GUI refinement, release 1.0.0
 
 **Request:** hard safety features protecting the user's system and data, and the files the hardware and the

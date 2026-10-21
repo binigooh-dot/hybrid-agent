@@ -29,7 +29,8 @@ def main(out: Path) -> int:
     tmp = Path(tempfile.mkdtemp())
     cfg = Config(backend="scripted", workspace=tmp / "ws", log_dir=tmp / "logs", persona_dir=tmp / "personas")
     cfg.workspace.mkdir()
-    srv, app = create_server(cfg, port=0)
+    srv, app = create_server(cfg, port=0, state=tmp)
+    app.scheduler.start()
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{app.port}/?token={app.token}"
     errors: list[str] = []
@@ -37,7 +38,7 @@ def main(out: Path) -> int:
     with sync_playwright() as p:
         browser = p.chromium.launch(executable_path=chromium if os.path.exists(chromium) else None)
         page = browser.new_page(viewport={"width": 1360, "height": 900})
-        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.on("pageerror", lambda e: errors.append(f"{e} @ {(e.stack or '').splitlines()[1:3]}"))
         page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
         page.goto(url)
         page.wait_for_selector(".pick")
@@ -90,20 +91,42 @@ def main(out: Path) -> int:
         page.screenshot(path=str(out / "5_tools.png"), full_page=True)
         from hybrid_agent.security.backup import snapshot
         victim = cfg.workspace / "notes.txt"
-        victim.write_text("original")
+        victim.write_text("original", encoding="utf-8")
         snapshot(cfg.workspace, victim, "edit")
-        victim.write_text("changed by agent")
+        victim.write_text("changed by agent", encoding="utf-8")
         page.on("dialog", lambda d: d.accept())
         page.click("[data-tab=safety]")
         page.wait_for_selector("#s-backups >> text=Restore")
         page.screenshot(path=str(out / "6_safety.png"), full_page=True)
         page.click("#s-backups >> text=Restore")
         page.wait_for_timeout(500)
-        if victim.read_text() != "original":
+        if victim.read_text(encoding="utf-8") != "original":
             errors.append("Restore button did not restore the file")
         page.click("#s-doctor")
         page.wait_for_selector("#s-table tr >> nth=1")
         page.screenshot(path=str(out / "7_checks.png"), full_page=True)
+
+        # --- tasks: create one, run it, open the result
+        page.click("[data-tab=tasks]")
+        page.fill("#tk-name", "Demo briefing")
+        page.fill("#tk-prompt", "demo")
+        page.select_option("#tk-sched", "daily")
+        page.fill("#tk-time", "07:30")
+        page.click("#tk-save-run")
+        page.wait_for_selector("#run-list >> text=Demo briefing", timeout=20000)
+        if "daily at 07:30" not in page.inner_text("#task-list"):
+            errors.append("task schedule not shown")
+        page.screenshot(path=str(out / "9_tasks.png"), full_page=True)
+        page.click("#run-list >> text=Open")
+        page.wait_for_selector("#viewer:not(.hidden)")
+        if "Demo complete" not in page.inner_text("#v-text"):
+            errors.append("task result viewer empty")
+        page.click("#v-close")
+
+        # --- control panel (engine status, models, settings, storage)
+        page.click("[data-tab=control]")
+        page.wait_for_selector("#storage dt")
+        page.screenshot(path=str(out / "10_control.png"), full_page=True)
 
         # --- phone width
         page.set_viewport_size({"width": 390, "height": 844})

@@ -12,7 +12,7 @@ class FileToolTests(ToolTestCase, unittest.TestCase):
         self.assertIn("2  two", self.ok("read_file", path="a/b.txt"))
         self.ok("edit_file", path="a/b.txt", old_text="two", new_text="TWO")
         self.ok("append_file", path="a/b.txt", content="three\n")
-        self.assertEqual((self.ws / "a/b.txt").read_text(), "one\nTWO\nthree\n")
+        self.assertEqual((self.ws / "a/b.txt").read_text(encoding="utf-8"), "one\nTWO\nthree\n")
         self.assertIn("2 more lines", self.ok("read_file", path="a/b.txt", limit=1))
 
     def test_edit_errors_are_helpful(self):
@@ -55,7 +55,7 @@ class FileToolTests(ToolTestCase, unittest.TestCase):
             __import__("hybrid_agent.core.messages", fromlist=["ToolCall"]).ToolCall(
                 "t", "write_file", {"path": "k.txt", "content": "2"}))
         self.assertTrue(r.is_error)
-        self.assertEqual((self.ws / "k.txt").read_text(), "1")
+        self.assertEqual((self.ws / "k.txt").read_text(encoding="utf-8"), "1")
 
 
 class ArchiveToolTests(ToolTestCase, unittest.TestCase):
@@ -67,7 +67,7 @@ class ArchiveToolTests(ToolTestCase, unittest.TestCase):
             self.assertIn("p/one.txt", self.ok("archive_list", path=name))
             out = name.replace(".", "_")
             self.ok("archive_extract", path=name, destination=out)
-            self.assertEqual((self.ws / out / "p/two.txt").read_text(), "2")
+            self.assertEqual((self.ws / out / "p/two.txt").read_text(encoding="utf-8"), "2")
 
     def test_zip_slip_blocked(self):
         import zipfile

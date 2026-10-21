@@ -183,13 +183,13 @@ def register(reg: ToolRegistry) -> None:
         backup.snapshot(ctx.workspace, dst, "convert overwrite")
         if source.endswith((".csv", ".tsv")) and destination.endswith(".json"):
             rows = load_rows(ctx, source)
-            dst.write_text(json.dumps(rows, indent=2))
+            dst.write_text(json.dumps(rows, indent=2), encoding="utf-8")
         elif source.endswith(".json") and destination.endswith((".csv", ".tsv")):
-            rows = json.loads(resolve_in_workspace(ctx.workspace, source).read_text())
+            rows = json.loads(resolve_in_workspace(ctx.workspace, source).read_text(encoding="utf-8"))
             if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
                 raise ToolError("JSON must be a list of objects to convert to CSV.")
             cols = list(dict.fromkeys(k for r in rows for k in r))
-            with dst.open("w", newline="") as f:
+            with dst.open("w", newline="", encoding="utf-8") as f:
                 w = csv.DictWriter(f, cols, delimiter="\t" if destination.endswith(".tsv") else ",")
                 w.writeheader()
                 w.writerows(rows)

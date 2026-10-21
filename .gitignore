@@ -15,3 +15,9 @@ dist/
 build/
 *.egg-info/
 hybrid_agent/MANIFEST.sha256
+# developer-mode state (portable builds keep these in home/)
+/tasks/
+/models/
+/runtime/
+/dist-win/
+packaging/version_info.txt

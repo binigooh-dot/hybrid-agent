@@ -1,48 +1,47 @@
-# Hybrid Agent 1.0.0
+# Hybrid Agent 1.1.0: the desktop app
 
-A tool-using agent and a council of persona agents that run on **your own computer with no API key**
-(a local model via Ollama, llama.cpp or LM Studio), with **Claude** as an optional brain. It has a local
-web GUI (Agent Studio) and kernel-level safety.
+A tool-using agent and a council of persona agents that run on **your own computer with no API key**, now as a
+**one-folder desktop app**: the GUI, the local model engine, your models, tasks and files live together.
 
-## Install
+## Download and run
 
-```bash
-pip install hybrid_agent-1.0.0-py3-none-any.whl          # Python 3.10+, no dependencies
-pip install "hybrid_agent-1.0.0-py3-none-any.whl[claude]" # optional: Claude support
-sudo apt install bubblewrap                               # Linux: enables the strict sandbox (recommended)
+| File | For |
+|---|---|
+| `HybridAgent-1.1.0-windows-x64.zip` | Windows 10/11 (64-bit): unzip, double-click **HybridAgent.exe** |
+| `HybridAgent-1.1.0-linux-x86_64.zip` | Linux x86-64: unzip, run `./HybridAgent` (install `bubblewrap` for the strict sandbox) |
+| `hybrid_agent-1.1.0-py3-none-any.whl` / `.tar.gz` | Python 3.10+ anywhere: `pip install …whl`, then `hybrid-agent studio` |
 
-hybrid-agent doctor                       # what's ready, what's missing
-hybrid-agent gui --backend scripted       # try the GUI with demo replies, no model needed
-hybrid-agent gui                          # the real thing (after `ollama pull qwen2.5:7b`)
-```
+Then open the **Control** tab: *Install engine* → *Download* a model → *Run check* (confirms the agents can
+reach Wikipedia and the web). Check downloads with `sha256sum -c SHA256SUMS`.
 
-Check the download: `sha256sum -c SHA256SUMS`. After installing, `hybrid-agent diagnose` also verifies
-every package file against the built-in integrity manifest.
+Windows may show a SmartScreen warning because the app isn't code-signed ("More info" → "Run anyway").
 
-## Highlights
+## New in 1.1.0
 
-- **80 tools** in 16 categories, with tool profiles so small models stay focused.
-- **Council:** 8 roles; 4 protocols (roundtable, debate, vote, critique); weighted votes; mixed models.
-- **Personas with animated ASCII faces:** 7 expressions, plus talking, thinking and blinking animations.
-  About 2 KB per persona.
-- **Agent Studio GUI:**
-  - a 3-step council with a live stage and a decision card;
-  - chat;
-  - a face builder;
-  - a tool browser;
-  - a safety centre with one-click undo;
-  - clear Allow/Deny approvals.
-- **Hard safety:**
-  - a kernel sandbox: system read-only, home hidden, only the workspace writable;
-  - CPU, memory and file-size caps;
-  - protected system, hardware and agent files;
-  - automatic backups with undo;
-  - a disk guard, safe mode, an audit log and an integrity manifest.
-- **Verified:** 39/39 safety drills, 133 tests, and ruff, mypy, bandit, vulture and radon all clean.
-  A real-browser GUI test also passes.
+- **Desktop app**: a portable `home/` folder holds settings, workspace, personas, logs, tasks, the model
+  engine and models. It reopens the existing window instead of starting twice, and Quit stops everything.
+- **Control panel**: install/start/stop Ollama inside the folder; download, switch and delete models with
+  progress; online check; settings; storage.
+- **Tasks**: queue and schedule agents, councils or safety drills (once, every N minutes, daily, weekdays).
+  One at a time, with run history and saved results. Unattended tasks are read-only by default.
+- **Online, politely**: honest User-Agent with your contact, Retry-After, proxy support, and a search chain
+  (SearXNG → DuckDuckGo → Marginalia → Wikipedia) that never pretends to be a browser.
+- **Crisper faces**: box-drawing faces in a bundled font that joins up on every computer; talking, thinking
+  and blinking animations.
+- **GUI**: one health signal in the top bar, grouped tabs, new Tasks and Control tabs.
+- **Windows fixes** found by testing the .exe: UTF-8 everywhere, bundled time zones, whole-tree timeouts.
+
+## Verified
+
+- 158 tests and 39/39 safety drills, from source, in the packaged Linux app, and in the Windows .exe
+  (under Wine). ruff, mypy, bandit, vulture and radon are clean, and a real-browser GUI test passes.
+- Live end to end: the engine downloaded into the folder, a model was pulled, and scheduled tasks ran on the
+  local model using live Wikipedia and weather data.
+- The included GitHub workflow re-runs everything on real Windows, macOS and Linux.
 
 ## Known limits
 
-- Network access from inside the sandbox is not cut.
-- Windows gets environment scrubbing but no filesystem sandbox (use WSL for strict isolation).
-- Local models must support tool calling, or use prompt mode (automatic).
+- Windows has no OS sandbox the app can turn on by itself: commands run with secrets removed and need your
+  approval. Use WSL plus the Linux build for full isolation.
+- Network access from inside the Linux sandbox isn't cut.
+- Search engines may refuse automated requests from some networks; your own SearXNG is the most reliable option.

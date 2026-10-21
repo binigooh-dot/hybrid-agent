@@ -18,6 +18,9 @@ PKG = Path(__file__).resolve().parent.parent
 
 
 def check_compile() -> tuple[bool, str]:
+    import sys
+    if getattr(sys, "frozen", False):
+        return True, "packaged app: code was compiled at build time (the manifest check covers integrity)"
     buf = io.StringIO()
     with redirect_stdout(buf):
         ok = compileall.compile_dir(str(PKG), quiet=1, force=False)
@@ -50,14 +53,15 @@ def check_profiles_and_roles() -> tuple[bool, str]:
 
 def check_personas() -> tuple[bool, str]:
     from ..personas import load_presets, render_all
+    from ..personas.faces import in_font
     presets = load_presets()
     for p in presets:
         for ex, frames in render_all(p.face).items():
             for frame in frames:
                 rows = frame.split("\n")
-                if len(rows) != 7 or any(len(r) != 16 for r in rows) or not frame.isascii():
+                if len(rows) != 7 or any(len(r) != 16 for r in rows) or not in_font(frame):
                     return False, f"{p.id}: face '{ex}' is malformed"
-    return True, f"{len(presets)} personas: every expression and animation frame is 7x16 ASCII"
+    return True, f"{len(presets)} personas: every expression and animation frame is 7x16, all in the bundled font"
 
 
 def check_manifest() -> tuple[bool, str]:

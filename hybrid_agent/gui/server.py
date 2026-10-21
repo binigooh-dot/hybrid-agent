@@ -10,8 +10,10 @@ Security model (it runs on YOUR computer, so it is locked down):
 """
 from __future__ import annotations
 
+import datetime as dt
 import hmac
 import json
+import os
 import platform
 import queue
 import secrets
@@ -20,6 +22,8 @@ import threading
 import time
 import urllib.parse
 import webbrowser
+from collections.abc import Callable
+from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -28,16 +32,20 @@ from ..backends import build_backend, build_local_backend
 from ..backends.router import RouterBackend
 from ..core.agent import DEFAULT_SYSTEM_PROMPT, Agent
 from ..core.config import Config
-from ..core.errors import ToolError
+from ..core.errors import AgentCancelled, ToolError
+from ..core.home import home_dir, state_dir
 from ..council.protocols import PROTOCOLS
 from ..council.roles import ROLES
 from ..personas import EXPRESSIONS, Persona, delete_persona, load_personas, random_face, render_all, save_persona
 from ..personas.faces import COLORS, EYES, HAIR, MOUTHS, NOSES, SHAPES
+from ..runtime import OllamaRuntime
+from ..tasks import Scheduler, Task, TaskStore, describe, execute
 from ..tools import PROFILES, ToolContext, build_full_registry, build_registry
 from .jobs import ApprovalBroker, EventBus, JobBusy, JobManager
 
 STATIC = Path(__file__).resolve().parent / "static"
-STATIC_FILES = {"app.js": "text/javascript", "app.css": "text/css", "favicon.svg": "image/svg+xml"}
+STATIC_FILES = {"app.js": "text/javascript", "app.css": "text/css", "favicon.svg": "image/svg+xml",
+                "fonts/face-mono.woff2": "font/woff2", "fonts/face-mono-LICENSE.txt": "text/plain"}
 MAX_BODY = 1_000_000
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
        "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
@@ -52,7 +60,7 @@ class HTTPError(Exception):
 class App:
     """All GUI state. One instance per server."""
 
-    def __init__(self, cfg: Config, port: int):
+    def __init__(self, cfg: Config, port: int, state: Path | None = None):
         self.cfg, self.port = cfg, port
         self.token = secrets.token_urlsafe(24)
         self.bus = EventBus()
@@ -63,6 +71,13 @@ class App:
         self._chat_key: tuple | None = None
         self._meta: tuple[float, dict] | None = None
         self._lock = threading.Lock()
+        self.home = home_dir()                      # portable mode: everything under one folder
+        state = state or state_dir()                # tasks/, runtime/, models/ live here
+        self.store = TaskStore(state / "tasks")
+        self.scheduler = Scheduler(self.store, self.start_task, lambda: self.jobs.status() is not None,
+                                   on_change=self.tasks_changed)
+        self.runtime = OllamaRuntime(state, cfg.log_dir)
+        self.on_quit: Callable[[], None] | None = None
 
     def check_token(self, value: str | None) -> bool:
         return bool(value) and hmac.compare_digest(str(value).encode(), self.token.encode())
@@ -90,6 +105,7 @@ class App:
             self._meta = (now, {
                 "version": __version__, "backend": backend, "workspace": str(self.cfg.workspace.resolve()),
                 "auto_approve": self.cfg.auto_approve, "safe_mode": self.cfg.safe_mode, "os": platform.system(),
+                "sandbox": self.cfg.sandbox,
                 "profiles": list(PROFILES), "profile_tools": {p: build_registry(ctx, p).names() for p in PROFILES},
                 "roles": {k: {"title": r.title, "tools": r.tools} for k, r in ROLES.items()},
                 "protocols": {k: p.description for k, p in PROTOCOLS.items()}, "expressions": list(EXPRESSIONS),
@@ -111,6 +127,99 @@ class App:
                 "protected": len(protected_paths()), "workspace": str(self.cfg.workspace.resolve()),
                 "audit_log": str(self.cfg.log_dir / "audit.jsonl") if self.cfg.log_dir else None,
                 "backups": list_backups(self.cfg.workspace)[:50], "manifest": verify_manifest()}
+
+    # ------------------------------------------------------------ tasks
+    def tasks_changed(self) -> None:
+        self.bus.publish("tasks_changed")
+
+    def runtime_progress(self, task: dict) -> None:
+        self.bus.publish("runtime_progress", **task)
+
+    def start_task(self, task: Task) -> None:
+        """Called by the scheduler when it's this task's turn: runs it as a normal background job."""
+        holder: dict = {}
+
+        def relay(kind: str, data: dict) -> None:
+            if kind == "tool_call":
+                self.bus.publish("task_activity", task=task.id, tool=data.get("name"))
+
+        def run():
+            started = dt.datetime.now().replace(microsecond=0)
+            self.bus.publish("task_started", task=task.id, name=task.name)
+            try:
+                text = execute(task, self.cfg, approver=self.broker.approver(f"task: {task.name}"),
+                               asker=self.broker.asker(f"task: {task.name}"), on_event=relay,
+                               cancel_hook=lambda c: holder.setdefault("cancel", c))
+            except AgentCancelled:
+                self.store.record_run(task.id, "cancelled", started, "(stopped)")
+                raise
+            except Exception as e:
+                self.store.record_run(task.id, "error", started, f"{type(e).__name__}: {e}")
+                raise
+            run_info = self.store.record_run(task.id, "ok", started, text)
+            return {"task": task.id, "name": task.name, "answer": text, "run": run_info}
+        def cancel() -> None:
+            if "cancel" in holder:
+                holder["cancel"]()
+        self.jobs.start("task", run, cancel=cancel)
+
+    def tasks_payload(self) -> dict:
+        return {"tasks": [{**asdict(t), "when": describe(t.schedule)} for t in self.store.all()],
+                "scheduler": self.scheduler.status(), "running": self.jobs.status(), "runs": self.store.runs(40)}
+
+    # ------------------------------------------------------------ control panel
+    def control(self) -> dict:
+        from ..core.home import EDITABLE, read_settings
+        return {"home": str(self.home) if self.home else None, "portable": bool(self.home),
+                "settings": read_settings(self.home) if self.home else {}, "editable": list(EDITABLE),
+                "runtime": self.runtime.status(), "disk": self.runtime.disk_used(),
+                "free_gb": round(shutil.disk_usage(state_dir()).free / 1e9, 1),
+                "model": self.cfg.local_model, "backend_mode": self.cfg.backend,
+                "contact": os.environ.get("AGENT_CONTACT", ""), "searxng": self.cfg.searxng_url or ""}
+
+    def change_settings(self, changes: dict) -> dict:
+        from ..core.home import write_settings
+        changes = {str(k): str(v) for k, v in changes.items()}
+        if changes.get("AGENT_SANDBOX") == "off":
+            raise HTTPError(400, "Turning the sandbox off can only be done by editing settings.env by hand.")
+        if self.home:
+            write_settings(self.home, changes)
+        else:   # developer checkout: apply for this session only
+            from ..core.home import EDITABLE
+            for k, v in changes.items():
+                if k not in EDITABLE:
+                    raise HTTPError(400, f"not editable here: {k}")
+                os.environ[k] = v
+        fresh = Config.from_env()
+        for attr in ("local_model", "local_provider", "local_base_url", "backend", "searxng_url", "sandbox",
+                     "safe_mode", "min_free_mb", "local_num_ctx"):
+            setattr(self.cfg, attr, getattr(fresh, attr))
+        self.cfg.validate()
+        with self._lock:
+            self._chat, self._meta = None, None
+        return self.control()
+
+    def online_check(self) -> list[dict]:
+        """Can the agents reach the internet from this computer? Runs the real tools, in parallel."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        from ..core.messages import ToolCall
+        reg = build_registry(ToolContext.from_config(self.cfg), "research", safe_mode=True)
+        checks = [("Wikipedia", "wikipedia_summary", {"title": "Ada Lovelace"}),
+                  ("Web search", "web_search", {"query": "Ada Lovelace", "max_results": 2}),
+                  ("Weather (Open-Meteo)", "weather", {"place": "London", "days": 1}),
+                  ("arXiv", "arxiv_search", {"query": "language model agents", "max_results": 1})]
+
+        def one(c):
+            name, tool, args = c
+            if tool not in reg.names():
+                return {"check": name, "ok": False, "ms": 0, "detail": f"{tool} not available"}
+            t0 = time.monotonic()
+            r = reg.execute(ToolCall("online", tool, args))
+            return {"check": name, "ok": not r.is_error and "No results" not in r.content[:20],
+                    "ms": round((time.monotonic() - t0) * 1000), "detail": r.content.strip().splitlines()[0][:160]}
+        with ThreadPoolExecutor(4) as pool:
+            return list(pool.map(one, checks))
 
     # ------------------------------------------------------------ jobs
     def chat_agent(self, persona_id: str | None, profile: str | None) -> Agent:
@@ -177,7 +286,7 @@ class App:
 # ======================================================================= HTTP
 ROUTES: dict[tuple[str, str], str] = {}
 PREFIX_ROUTES: dict[tuple[str, str], str] = {}
-PUBLIC = {"/", "/static/app.js", "/static/app.css", "/static/favicon.svg"}   # the index checks its own token
+PUBLIC = {"/"} | {f"/static/{n}" for n in STATIC_FILES}   # static assets hold no data; the index checks its own token
 
 
 def route(method: str, path: str, prefix: bool = False):
@@ -207,7 +316,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _send(self, status: int, body, ctype: str = "application/json", csp: str = CSP):
         data = body if isinstance(body, bytes) else (
-            body.encode() if isinstance(body, str) else json.dumps(body, default=str).encode())
+            body.encode() if isinstance(body, str) else json.dumps(body, default=str, ensure_ascii=False).encode())
         text = ctype.startswith(("text", "application/json"))
         self._headers(status, ctype + ("; charset=utf-8" if text else ""), len(data), csp)
         self.wfile.write(data)
@@ -287,7 +396,7 @@ class Handler(BaseHTTPRequestHandler):
         from .guide import build_guide_html
         nonce = secrets.token_urlsafe(16)
         self._send(200, build_guide_html(nonce=nonce, cfg=self.app.cfg), "text/html",
-                   csp=CSP.replace("script-src 'self'", f"script-src 'nonce-{nonce}'"))
+                   csp=CSP.replace("script-src 'self'", f"script-src 'nonce-{nonce}'") + "; font-src 'self' data:")
 
     # ----------------------------------------------------------- api
     @route("GET", "/api/meta")
@@ -337,6 +446,96 @@ class Handler(BaseHTTPRequestHandler):
         restored = restore(self.app.cfg.workspace, str(self._body().get("id", "")))
         self.app.bus.publish("restored", path=restored)
         self._send(200, {"restored": restored})
+
+    # ------------------------------------------------------ tasks
+    @route("GET", "/api/tasks")
+    def api_tasks(self, path, query):
+        self._send(200, self.app.tasks_payload())
+
+    @route("POST", "/api/tasks")
+    def api_task_save(self, path, query):
+        t = self.app.store.upsert(self._body())
+        self.app.bus.publish("tasks_changed")
+        self._send(200, asdict(t))
+
+    @route("DELETE", "/api/tasks/", prefix=True)
+    def api_task_delete(self, path, query):
+        task_id = path.removeprefix("/api/tasks/")
+        self.app.scheduler.remove(task_id)
+        self._send(200, {"deleted": self.app.store.delete(task_id)})
+
+    @route("POST", "/api/tasks/run")
+    def api_task_run(self, path, query):
+        try:
+            queued = self.app.scheduler.enqueue(str(self._body().get("id", "")))
+        except KeyError as e:
+            raise HTTPError(404, str(e)) from None
+        self._send(200, {"queued": queued})
+
+    @route("POST", "/api/tasks/pause")
+    def api_task_pause(self, path, query):
+        self.app.scheduler.set_paused(bool(self._body().get("paused")))
+        self._send(200, self.app.scheduler.status())
+
+    @route("GET", "/api/tasks/result/", prefix=True)
+    def api_task_result(self, path, query):
+        try:
+            self._send(200, {"text": self.app.store.result_text(path.removeprefix("/api/tasks/result/"))})
+        except KeyError:
+            raise HTTPError(404, "no such result") from None
+
+    # ------------------------------------------------------ control panel
+    @route("GET", "/api/control")
+    def api_control(self, path, query):
+        self._send(200, self.app.control())
+
+    @route("POST", "/api/settings")
+    def api_settings(self, path, query):
+        self._send(200, self.app.change_settings(self._body().get("changes") or {}))
+
+    @route("POST", "/api/runtime")
+    def api_runtime(self, path, query):
+        rt, action = self.app.runtime, self._body().get("action")
+        try:
+            if action == "install":
+                rt.install(self.app.runtime_progress)
+                result = "installing"
+            elif action == "start":
+                result = rt.start()
+            elif action == "stop":
+                result = rt.stop()
+            else:
+                raise HTTPError(400, "action must be install, start or stop")
+        except RuntimeError as e:
+            raise HTTPError(409, str(e)) from None
+        self._send(200, {"result": result, "runtime": rt.status()})
+
+    @route("POST", "/api/models")
+    def api_models(self, path, query):
+        b = self._body()
+        rt, action, name = self.app.runtime, b.get("action"), str(b.get("name", "")).strip()
+        try:
+            if action == "pull":
+                rt.pull(name, self.app.runtime_progress)
+            elif action == "delete":
+                rt.delete(name)
+            elif action == "use":
+                self.app.change_settings({"LOCAL_MODEL": name})
+            else:
+                raise HTTPError(400, "action must be pull, delete or use")
+        except (RuntimeError, OSError) as e:
+            raise HTTPError(409, str(e)) from None
+        self._send(200, self.app.control())
+
+    @route("GET", "/api/online")
+    def api_online(self, path, query):
+        self._send(200, self.app.online_check())
+
+    @route("POST", "/api/quit")
+    def api_quit(self, path, query):
+        self._send(200, {"bye": True})
+        if self.app.on_quit:
+            threading.Thread(target=self.app.on_quit, daemon=True).start()
 
     @route("POST", "/api/chat")
     def api_chat(self, path, query):
@@ -399,26 +598,43 @@ class GuiServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
 
-def create_server(cfg: Config, port: int = 8765) -> tuple[GuiServer, App]:
-    """Build (but don't start) the server. port=0 picks a free port (tests)."""
+def create_server(cfg: Config, port: int = 8765, state: Path | None = None) -> tuple[GuiServer, App]:
+    """Build (but don't start) the server. port=0 picks a free port (tests); state = where tasks/models live."""
     srv = GuiServer(("127.0.0.1", port), BaseHTTPRequestHandler)
-    app = App(cfg, srv.server_port)
+    app = App(cfg, srv.server_port, state)
     srv.RequestHandlerClass = type("BoundHandler", (Handler,), {"app": app})
     return srv, app
 
 
-def serve(cfg: Config, port: int = 8765, open_browser: bool = True) -> int:
-    srv, app = create_server(cfg, port)
+def serve(cfg: Config, port: int = 8765, open_browser: bool = True, url_file: Path | None = None,
+          runtime: OllamaRuntime | None = None) -> int:
+    """Run Agent Studio until Ctrl+C or the GUI's Quit button. url_file: where the launcher
+    records the link, so starting the app a second time just reopens the browser."""
+    try:
+        srv, app = create_server(cfg, port)
+    except OSError:                               # port taken (another program): pick any free one
+        srv, app = create_server(cfg, 0)
     url = f"http://127.0.0.1:{app.port}/?token={app.token}"
     print(f"\n  Agent Studio is running:\n\n    {url}\n\n  Only this computer can connect; the link changes every "
-          f"launch.\n  Press Ctrl+C to stop.\n")
+          f"launch.\n  Close this window or press Ctrl+C to stop (or use Quit in the Control panel).\n")
+    if url_file:
+        url_file.parent.mkdir(parents=True, exist_ok=True)
+        url_file.write_text(url, encoding="utf-8")
+    if runtime:
+        app.runtime = runtime                     # the engine the launcher started, so Quit stops it too
+    app.on_quit = srv.shutdown
+    app.scheduler.start()
     if open_browser:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try:
         srv.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:
         print("\nStopping...")
-        app.jobs.stop()
     finally:
+        app.jobs.stop()
+        app.scheduler.stop()
+        app.runtime.stop()                        # only stops an engine this app started
         srv.server_close()
+        if url_file:
+            url_file.unlink(missing_ok=True)
     return 0

@@ -11,10 +11,10 @@
   "weight": 1.0,
   "face": {
     "hair": "spiky",
-    "shape": "square",
-    "eyes": "*",
+    "shape": "bold",
+    "eyes": "■",
     "glasses": false,
-    "nose": "L",
+    "nose": "┘",
     "mouth": "small",
     "beard": true,
     "earrings": false,

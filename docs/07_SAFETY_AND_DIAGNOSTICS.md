@@ -10,7 +10,7 @@ the one before misses, so no single mistake is fatal.
 | **Workspace fence** | `security/guards.py` `resolve_in_workspace`, `validate_workspace` | `..`, absolute paths and symlinks out of the workspace; `/`, home or system folders as the workspace |
 | **Approval** | `ToolRegistry.execute`, CLI y/N, GUI Allow/Deny | Shell, Python, tests, git commit, move, delete, download and overwrite run only when you say yes (silence = no) |
 | **Command blocklist** | `security/guards.py` `check_shell_command` | Recursive deletes outside the workspace (`rm -rf ~/`, `rm -r -f /`, `find / -delete`…), disk formatting, fork bombs, `curl … \| sh`, power-off, Windows `del /s`… even when approved |
-| **Network guard** | `security/netguard.py` | Web tools reach the public internet only. Cloud-metadata (169.254.169.254) and link-local addresses are always blocked, and every redirect hop is re-checked |
+| **Network guard** | `security/netguard.py` | Web tools reach the public internet only. Cloud-metadata (169.254.169.254) and link-local addresses are always blocked, and every redirect hop is re-checked. Behind a proxy, names the computer can't resolve itself are still checked (IP literals, `localhost`, `*.internal`, `*.local`, metadata hosts) |
 | **Resource limits** | `tools/builtin/shell.py`, `security/guards.py`, `archives.py`, `web.py` | Timeouts kill the whole process tree; output is capped at 1 MB per stream; streamed file reads; 20 MB whole-file cap; 1 GB / 20,000-entry archive cap; 50 MB download cap |
 | **ReDoS guard** | `security/guards.py` + `regex_worker.py` | Regexes that could take exponential time run in a separate process that is killed after 5 s |
 | **Git hardening** | `tools/builtin/code.py` | A repository's own config can't make git run programs (fsmonitor, hooks, external diff, pager, ssh, credential helpers) |
@@ -53,6 +53,13 @@ the rest of the room, and everything it changes can be put back.
 `AGENT_REQUIRE_SANDBOX=1` refuses commands when strict isolation is missing. On Linux install it with
 `sudo apt install bubblewrap` (Fedora: `dnf install bubblewrap`). macOS has `sandbox-exec` built in. Windows
 gets environment scrubbing only, so there keep approval on and consider WSL.
+
+**Windows:** there's no OS sandbox the app can switch on by itself, so commands run with secrets and
+code-injection variables removed, under approval and the blocklist. A timed-out command's whole process tree
+is ended with `taskkill /T`. For full isolation, use WSL and the Linux build.
+
+**Unattended tasks** (docs/08) default to *look, don't touch*: they get read and network tools only. Tasks
+set to *ask me first* use the normal Allow/Deny flow, and nobody answering means Deny.
 
 **Honest limits:** network access from inside the sandbox is not cut (some tasks need `pip install`);
 in `limits` mode commands can still read your files. For untrusted tasks, use `strict`, keep approval on
@@ -125,7 +132,7 @@ defence fails the tests.
 | Safe mode removes every write/execute tool (`hard.safe_mode`) | high | PASS |
 | Changes are recorded in the audit log, redacted (`hard.audit`) | medium | PASS |
 | Tampered package files are detected (`hard.integrity`) | high | PASS |
-| **Total** | | **39 / 39, 0 critical failures** |
+| **Total** | | **39 / 39, 0 critical failures** (also in the packaged Linux app and the Windows `.exe` under Wine) |
 
 ## Code health
 

@@ -1,14 +1,19 @@
 # Hybrid Agent: local agents, a council with faces, and Claude when you want it
 
 A tool-using AI agent that **runs entirely on your own computer with no API key** (a local model does
-the thinking), an optional **Claude** brain, a **council** of persona agents with animated **ASCII
+the thinking), an optional **Claude** brain, a **council** of persona agents with animated **text
 faces** that deliberate together, and **Agent Studio**, a local web GUI to drive it all.
 
+- **A one-folder desktop app:** `HybridAgent.exe` (or the Linux/macOS build) holds the GUI, the local model
+  engine, your models, tasks and files in one folder. Double-click and go ([docs/08](docs/08_DESKTOP_APP.md)).
+- **Tasks:** queue and schedule work for agents or a council (once, every N minutes, daily, weekdays), read-only by default.
+- **Control panel:** install/start the model engine, download and switch models, check the agents can reach the web.
+- **Online, politely:** live Wikipedia, web search, weather, arXiv and RSS, with an honest User-Agent, rate-limit handling and proxy support.
 - **80 tools in 16 categories** (files, shell, code/git, data, text, maths, time, web, network,
   knowledge, system, archives, memory, document search, planning, council board). **None needs a key.**
 - **Tool profiles** give each agent only what it needs (7–23 tools), so small models stay sharp.
 - **Council** with 8 roles, 4 protocols (roundtable, debate, vote, critique), mixed models and a shared blackboard.
-- **Personas with ASCII faces:** Sage, Vex and Nova built in, 7 expressions, talking and thinking animations, ~2 KB each, and a face builder in the GUI.
+- **Personas with text faces:** Sage, Vex and Nova built in. Crisp box-drawing faces in a bundled font, 7 expressions, talking, thinking and blinking animations, and a face builder in the GUI.
 - **Agent Studio GUI:** a 3-step council with a live stage, chat, face builder, tool browser, a safety centre with one-click undo, and clear Allow/Deny approvals.
 - **Agent Builder Knowledge Suite:** an interactive guide in one HTML file → [docs/agent_builder_suite.html](docs/agent_builder_suite.html)
 - **Hard safety:** commands run in a kernel sandbox (system read-only, home hidden, CPU/memory/file caps), protected system/hardware/agent files, automatic backups with undo, a disk guard, safe mode, an audit log and an integrity manifest. **39 safety fire drills, all passing** (see [docs/07](docs/07_SAFETY_AND_DIAGNOSTICS.md)).
@@ -30,7 +35,17 @@ faces** that deliberate together, and **Agent Studio**, a local web GUI to drive
    └────────────┘   ← needs no key
 ```
 
-## Quick start (no API key)
+## Quick start: the desktop app
+
+1. Download `HybridAgent-1.1.0-windows-x64.zip` (or the Linux build), unzip it anywhere and double-click
+   **HybridAgent.exe**. Your browser opens Agent Studio.
+2. **Control** tab: *Install engine*, then download a model (`qwen2.5:7b`, or `qwen2.5:1.5b` on older PCs),
+   then *Run check* to confirm the agents can reach Wikipedia and the web.
+3. Use **Council**, **Chat**, or schedule work in **Tasks**.
+
+Everything stays in that folder (`home/`). Build it yourself with `python scripts/build_exe.py` (see docs/08).
+
+## Quick start from source (no API key)
 
 ```bash
 # 1. Install Ollama (https://ollama.com/download), then:
@@ -62,7 +77,8 @@ mode the agent then uses Claude, with the local model as fallback.
 |---|---|
 | `python3 -m hybrid_agent` | Terminal chat (`/help`, `/tools`, `/reset`, `/usage`, `/exit`) |
 | `python3 -m hybrid_agent -p "..."` | One-shot prompt |
-| `python3 -m hybrid_agent gui` | Agent Studio web GUI (`--port`, `--no-browser`) |
+| `python3 -m hybrid_agent studio` | The all-in-one app: home folder + model engine + GUI + task scheduler (`--home`, `--port`, `--no-browser`, `--no-engine`) |
+| `python3 -m hybrid_agent gui` | Agent Studio web GUI only (`--port`, `--no-browser`) |
 | `python3 -m hybrid_agent council -p "..."` | Council (`--personas`, `--protocol`, `--rounds`, `--options`, `--council-config`, `--workers`) |
 | `python3 -m hybrid_agent diagnose` | Safety fire drills + integrity checks (`--only`, `--json`) |
 | `python3 -m hybrid_agent doctor` | Setup check (required vs optional) |
@@ -83,15 +99,19 @@ hybrid-agent/
 │   ├── backends/     [BACKENDS]     local (Ollama / OpenAI-compatible), claude, router, scripted
 │   ├── tools/        [TOOLS]        registry, profiles, builtin/ (15 modules, 80 tools)
 │   ├── council/      [COUNCIL]      roles, members, protocols, ballots, blackboard
-│   ├── personas/     [PERSONAS]     characters + animated ASCII faces; presets/ (Sage, Vex, Nova)
+│   ├── personas/     [PERSONAS]     characters + animated text faces; presets/ (Sage, Vex, Nova)
+│   ├── tasks/        [TASKS]        task queue, schedules, run history, scheduler
+│   ├── runtime/      [RUNTIME]      the local model engine kept in the home folder
+│   ├── app.py        [APP]          the one-click launcher (HybridAgent.exe / `studio`)
 │   ├── gui/          [GUI]          local web server, live events, approvals, knowledge-suite builder, static/
 │   ├── diagnostics/  [DIAGNOSTICS]  safety fire drills, tripwire harness, integrity checks
 │   └── cli/          [CLI]          command line, doctor
 ├── personas/         your persona files (the GUI saves here)
 ├── tests/            [TESTS]        one file per area: all offline
 ├── examples/         [EXAMPLE]      council configs (role-based, personas, local-only), library usage
-├── scripts/          [SCRIPTS]      health check, browser smoke test, doc generators
-├── docs/             [DOCS]         numbered guides 01–07 + the interactive knowledge suite
+├── scripts/          [SCRIPTS]      health check, browser smoke test, doc generators, build_exe, build_release
+├── packaging/        [PACKAGING]    PyInstaller recipe, launcher, icon
+├── docs/             [DOCS]         numbered guides 01–08 + the interactive knowledge suite
 └── NOTES.md                         build log: what was done, why, and what was verified
 ```
 Every source file starts with a `[LAYER / name]` label. [docs/FILE_MAP.md](docs/FILE_MAP.md) lists them all.
@@ -107,5 +127,6 @@ Every source file starts with a `[LAYER / name]` label. [docs/FILE_MAP.md](docs/
 | [03 Architecture](docs/03_ARCHITECTURE.md) | Layers, diagrams, design decisions |
 | [04 Tools](docs/04_TOOLS.md) | Full tool catalogue, profiles, adding tools (generated) |
 | [05 Council](docs/05_COUNCIL.md) | Roles, protocols, configs, personas in councils |
-| [06 GUI & personas](docs/06_GUI_AND_PERSONAS.md) | Agent Studio, ASCII faces and animations, roadmap |
+| [06 GUI & personas](docs/06_GUI_AND_PERSONAS.md) | Agent Studio tabs, text faces and animations, the bundled font, roadmap |
 | [07 Safety & diagnostics](docs/07_SAFETY_AND_DIAGNOSTICS.md) | Protective layers, fire-drill results, code health |
+| [08 Desktop app](docs/08_DESKTOP_APP.md) | The .exe and its folder, Control panel, tasks and schedules, going online, building it |

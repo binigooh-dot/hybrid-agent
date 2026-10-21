@@ -12,7 +12,7 @@ CSV = "name,city,amount\nAnn,Paris,10\nBob,Rome,25.5\nCid,Paris,4\n"
 class DataToolTests(ToolTestCase, unittest.TestCase):
     def setUp(self):
         super().setUp()
-        (self.ws / "s.csv").write_text(CSV)
+        (self.ws / "s.csv").write_text(CSV, encoding="utf-8")
 
     def test_csv_read(self):
         out = self.ok("csv_read", path="s.csv")
@@ -33,7 +33,7 @@ class DataToolTests(ToolTestCase, unittest.TestCase):
         self.assertEqual(json.loads(self.ok("json_query", path="s.json", query="*.city")),
                          ["Paris", "Rome", "Paris"])
         self.ok("convert_data", source="s.json", destination="back.csv")
-        self.assertIn("Bob,Rome,25.5", (self.ws / "back.csv").read_text())
+        self.assertIn("Bob,Rome,25.5", (self.ws / "back.csv").read_text(encoding="utf-8"))
 
     def test_sqlite(self):
         self.ok("sqlite_query", path="db.sqlite", sql="CREATE TABLE t (x INTEGER)")
@@ -43,7 +43,7 @@ class DataToolTests(ToolTestCase, unittest.TestCase):
 
     def test_xml(self):
         (self.ws / "b.xml").write_text('<lib><book lang="en"><title>A</title></book>'
-                                       '<book lang="fr"><title>B</title></book></lib>')
+                                       '<book lang="fr"><title>B</title></book></lib>', encoding="utf-8")
         self.assertEqual(self.ok("xml_query", path="b.xml", xpath=".//book[@lang='fr']/title"), "<title> B")
         self.assertEqual(self.ok("xml_query", path="b.xml", xpath=".//book[@lang='en']"), '<book lang="en">')
 
@@ -61,7 +61,7 @@ class TextToolTests(ToolTestCase, unittest.TestCase):
         self.ok("write_file", path="r.txt", content="v1 v2 v3")
         self.assertIn("3 replacement", self.ok("regex_replace_file", path="r.txt", pattern=r"v(\d)",
                                                 replacement=r"version-\1"))
-        self.assertEqual((self.ws / "r.txt").read_text(), "version-1 version-2 version-3")
+        self.assertEqual((self.ws / "r.txt").read_text(encoding="utf-8"), "version-1 version-2 version-3")
 
     def test_encode_hash_ids_compare(self):
         b64 = self.ok("encode_decode", text="hi there", codec="base64", direction="encode")

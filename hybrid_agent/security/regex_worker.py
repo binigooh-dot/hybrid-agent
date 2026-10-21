@@ -28,7 +28,7 @@ def main() -> None:
         out = []
         for rel, path in req["files"]:
             try:
-                with open(path, errors="replace") as fh:
+                with open(path, errors="replace", encoding="utf-8") as fh:
                     for i, line in enumerate(fh, 1):
                         if rx.search(line):
                             out.append(f"{rel}:{i}: {line.rstrip()[:300]}")

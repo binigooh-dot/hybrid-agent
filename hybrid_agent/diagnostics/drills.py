@@ -115,7 +115,7 @@ def drill_zip_bomb(sb):
 @drill("fs.root_delete", "Deleting the workspace root is refused", "filesystem", "high",
        "The model asks to delete '.', the whole workspace, with approval granted.")
 def drill_root_delete(sb):
-    (sb / "keep.txt").write_text("x")
+    (sb / "keep.txt").write_text("x", encoding="utf-8")
     r = _call(_reg(sb, approve=True), "delete_path", path=".")
     return r.is_error and (sb / "keep.txt").exists(), "refused" if r.is_error else "DELETED"
 
@@ -203,7 +203,7 @@ def drill_blocklist(sb):
 @drill("exec.approval", "Denied approval means nothing runs", "execution", "critical",
        "The model calls run_shell/run_python/delete_path and the user answers 'no'.")
 def drill_approval(sb):
-    (sb / "victim.txt").write_text("x")
+    (sb / "victim.txt").write_text("x", encoding="utf-8")
     reg = _reg(sb, approve=False)
     calls = [("run_shell", {"command": "touch PWNED1"}), ("run_python", {"code": "open('PWNED2','w')"}),
              ("delete_path", {"path": "victim.txt"}), ("move_path", {"source": "victim.txt", "destination": "y"})]
@@ -227,8 +227,8 @@ def _marker_processes(marker: str) -> list[int]:
 @drill("exec.timeout_tree", "Timeouts kill the whole process tree", "execution", "high",
        "A command starts a child process and hangs; after the timeout no orphan may survive.")
 def drill_timeout_tree(sb):
-    if not Path("/proc").exists():
-        return True, "skipped (no /proc on this OS)"
+    if os.name != "posix" or not Path("/proc").exists():
+        return True, "skipped: POSIX drill (Windows kills the tree with taskkill /T)"
     marker = "37.4242"
     r = _call(_reg(sb, approve=True), "run_shell",
               command=f"python3 -c 'import time; time.sleep({marker})' & wait", timeout=1)
@@ -262,8 +262,8 @@ def drill_git(sb):
     if not shutil.which("git"):
         return True, "skipped (git not installed)"
     subprocess.run(["git", "init", "-q"], cwd=sb, check=True)
-    (sb / "f.txt").write_text("1")
-    with (sb / ".git" / "config").open("a") as f:
+    (sb / "f.txt").write_text("1", encoding="utf-8")
+    with (sb / ".git" / "config").open("a", encoding="utf-8") as f:
         f.write('[core]\n\tfsmonitor = "touch PWNED_FSMONITOR; false"\n'
                 '[diff]\n\texternal = "touch PWNED_DIFF; false"\n')
     reg = _reg(sb)
@@ -272,7 +272,7 @@ def drill_git(sb):
     # trap can only be sprung by the AGENT's git calls
     subprocess.run(["git", "-c", "core.fsmonitor=false", "add", "f.txt"], cwd=sb,
                    capture_output=True, check=False)
-    (sb / "f.txt").write_text("2")
+    (sb / "f.txt").write_text("2", encoding="utf-8")
     _call(reg, "git_diff")
     hit = [p.name for p in sb.glob("PWNED*")]
     return not hit, f"EXECUTED via {hit}" if hit else "git config commands not executed"
@@ -283,7 +283,7 @@ def drill_git(sb):
        "(and blocks every Python thread while it runs). A useful nested pattern must still work.")
 def drill_redos(sb):
     reg = _reg(sb)
-    (sb / "t.txt").write_text("a" * 32 + "!\n")
+    (sb / "t.txt").write_text("a" * 32 + "!\n", encoding="utf-8")
     start = time.monotonic()
     r1 = _call(reg, "regex_find", pattern="(a+)+$", text="a" * 32 + "!")
     r2 = _call(reg, "search_text", regex="(a+)+$")
@@ -401,10 +401,10 @@ def drill_corrupt_memory(sb):
     mem = sb / ".agent" / "memory.json"
     mem.parent.mkdir(parents=True)
     original = '{"important": {"value": "do not lose me", "tags": [], "updated": "x"'
-    mem.write_text(original)
+    mem.write_text(original, encoding="utf-8")
     _call(_reg(sb), "remember", key="new", value="v")
     backups = list(mem.parent.glob("memory.json.corrupt-*"))
-    kept = any(b.read_text() == original for b in backups)
+    kept = any(b.read_text(encoding="utf-8") == original for b in backups)
     return kept, f"backed up to {backups[0].name}" if kept else "ORIGINAL DATA OVERWRITTEN"
 
 
@@ -421,7 +421,7 @@ def drill_concurrent(sb):
         t.start()
     for t in ts:
         t.join()
-    data = json.loads((sb / ".agent" / "memory.json").read_text())
+    data = json.loads((sb / ".agent" / "memory.json").read_text(encoding="utf-8"))
     return len(data) == 200, f"{len(data)}/200 memories present"
 
 
@@ -440,7 +440,7 @@ def drill_atomic(sb):
         _call(reg, "remember", key="b", value="2")
     finally:
         memory.json.dumps = orig
-    data = json.loads((sb / ".agent" / "memory.json").read_text())
+    data = json.loads((sb / ".agent" / "memory.json").read_text(encoding="utf-8"))
     return data.get("a", {}).get("value") == "1", "old data intact" if "a" in data else "DATA LOST"
 
 
@@ -460,11 +460,11 @@ def drill_env(sb):
        "A tool result contains an API key; the session log on disk must not contain it.")
 def drill_log_redaction(sb):
     secret = "sk-ant-api03-" + "Z" * 40
-    (sb / "config.txt").write_text(f"key={secret}\n")
+    (sb / "config.txt").write_text(f"key={secret}\n", encoding="utf-8")
     backend = ScriptedBackend([Message(role="assistant", tool_calls=[ToolCall("1", "read_file", {"path": "config.txt"})]),
                                Message(role="assistant", content="done")])
     Agent(backend, _reg(sb), log_dir=sb / "logs").run("read config")
-    logs = "".join(p.read_text() for p in (sb / "logs").glob("*.jsonl"))
+    logs = "".join(p.read_text(encoding="utf-8") for p in (sb / "logs").glob("*.jsonl"))
     return secret not in logs, "redacted" if secret not in logs else "API KEY WRITTEN TO LOG"
 
 
@@ -576,10 +576,13 @@ def drill_council(sb):
 def drill_sandbox_isolation(sb):
     from ..security.sandbox import strict_available
     if not strict_available():
+        if os.name == "nt":
+            return True, ("skipped: Windows has no sandbox the app can switch on by itself; commands still run "
+                          "with secrets removed (see hard.env_injection). For full isolation use WSL.")
         return True, "skipped: no strict sandbox on this system (install bubblewrap) - limits mode only"
     home = sb / "fakehome"
     home.mkdir()
-    (home / "secret.txt").write_text("TOP-SECRET")
+    (home / "secret.txt").write_text("TOP-SECRET", encoding="utf-8")
     old_home, os.environ["HOME"] = os.environ.get("HOME"), str(home)
     os.environ["DRILL_API_KEY"] = "sk-ant-drill-0123456789abcdef0123"
     ws = sb / "ws"
@@ -604,8 +607,12 @@ def drill_kernel_limits(sb):
     import subprocess
     if os.name != "posix":
         return True, "skipped: POSIX only"
+    import shlex
+
+    from ..core.pyexe import internal_command
     from ..security.sandbox import Limits, wrap
-    cmd, env, sh, _ = wrap("python3 -c 'bytearray(600*1024*1024)' 2>/dev/null; echo mem=$?; "
+    py = shlex.join(internal_command())
+    cmd, env, sh, _ = wrap(f"{py} -c 'bytearray(600*1024*1024)' 2>/dev/null; echo mem=$?; "
                            "head -c 3000000 /dev/zero > big.bin 2>/dev/null; echo size=$(wc -c < big.bin)",
                            True, sb, limits=Limits(memory_mb=200, file_mb=1))
     # Reviewed (B602): a fixed literal command, run inside the sandbox wrapper in a throwaway folder
@@ -658,7 +665,7 @@ def drill_internal(sb):
     attempts = [("write_file", {"path": ".agent/memory.json", "content": "{}"}),
                 ("delete_path", {"path": ".agent"}), ("move_path", {"source": ".agent", "destination": "x"})]
     ran = [n for n, a in attempts if not _call(reg, n, **a).is_error]
-    intact = json.loads((sb / ".agent" / "memory.json").read_text()).get("k", {}).get("value") == "v"
+    intact = json.loads((sb / ".agent" / "memory.json").read_text(encoding="utf-8")).get("k", {}).get("value") == "v"
     return not ran and intact, "refused" if not ran else f"ALLOWED: {ran}"
 
 
@@ -666,7 +673,7 @@ def drill_internal(sb):
        "The agent overwrites a file, then deletes a folder (with approval). The user wants both back.")
 def drill_undo(sb):
     reg = _reg(sb, approve=True)
-    (sb / "essay.txt").write_text("my original essay")
+    (sb / "essay.txt").write_text("my original essay", encoding="utf-8")
     (sb / "photos").mkdir()
     (sb / "photos" / "a.jpg").write_bytes(b"jpeg")
     _call(reg, "write_file", path="essay.txt", content="oops")
@@ -674,7 +681,7 @@ def drill_undo(sb):
     from ..security.backup import list_backups
     for e in list_backups(sb):
         _call(reg, "restore_backup", backup_id=e["id"])
-    ok = (sb / "essay.txt").read_text() == "my original essay" and (sb / "photos" / "a.jpg").exists()
+    ok = (sb / "essay.txt").read_text(encoding="utf-8") == "my original essay" and (sb / "photos" / "a.jpg").exists()
     return ok, "both restored" if ok else "NOT RECOVERABLE"
 
 
@@ -703,7 +710,7 @@ def drill_audit(sb):
     reg = build_full_registry(ToolContext(workspace=sb / "ws", audit_dir=logs))
     (sb / "ws").mkdir()
     _call(reg, "write_file", path="cfg.txt", content="key=sk-ant-api03-" + "Q" * 30)
-    text = (logs / "audit.jsonl").read_text() if (logs / "audit.jsonl").exists() else ""
+    text = (logs / "audit.jsonl").read_text(encoding="utf-8") if (logs / "audit.jsonl").exists() else ""
     ok = "write_file" in text and "QQQQ" not in text
     return ok, "recorded, key redacted" if ok else f"audit: {text[:120]!r}"
 
@@ -711,15 +718,15 @@ def drill_audit(sb):
 @drill("hard.integrity", "Tampering with the agent's own files is detected", "protection", "high",
        "A copy of the agent is sealed with a manifest; then one of its files is modified and another added.")
 def drill_integrity(sb):
-    import shutil
-
-    from ..security.audit import PKG, verify_manifest, write_manifest
-    copy = sb / "pkg"
-    shutil.copytree(PKG / "security", copy, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    from ..security.audit import verify_manifest, write_manifest
+    copy = sb / "pkg"                            # a decoy program folder (works in the packaged app too)
+    (copy / "static").mkdir(parents=True)
+    (copy / "guards.py").write_text("def check(cmd):\n    return 'rm -rf /' not in cmd\n", encoding="utf-8")
+    (copy / "static" / "app.js").write_text("console.log('ok')\n", encoding="utf-8")
     write_manifest(copy)
     clean = verify_manifest(copy)[0] == "ok"
-    (copy / "guards.py").write_text((copy / "guards.py").read_text() + "\n# evil\n")
-    (copy / "backdoor.py").write_text("x")
+    (copy / "guards.py").write_text((copy / "guards.py").read_text(encoding="utf-8") + "\n# evil\n", encoding="utf-8")
+    (copy / "backdoor.py").write_text("x", encoding="utf-8")
     status, detail = verify_manifest(copy)
     ok = clean and status == "changed" and "guards.py" in detail and "backdoor.py" in detail
     return ok, detail if ok else f"clean={clean} status={status} {detail}"

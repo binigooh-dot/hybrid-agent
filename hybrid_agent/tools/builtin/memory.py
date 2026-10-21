@@ -32,7 +32,7 @@ def load(ctx: ToolContext) -> dict:
     if not p.exists():
         return {}
     try:
-        data = json.loads(p.read_text())
+        data = json.loads(p.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             raise ValueError("top level is not an object")
         return data
@@ -48,7 +48,7 @@ def _save(ctx: ToolContext, data: dict) -> None:
     p = _path(ctx)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, indent=2))
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
     tmp.replace(p)  # atomic, so a crash can't leave half a file
 
 

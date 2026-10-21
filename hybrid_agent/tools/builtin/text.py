@@ -105,7 +105,7 @@ def register(reg: ToolRegistry) -> None:
             raise ToolError(f"Bad replacement: {e}") from None
         if n:
             backup.snapshot(ctx.workspace, p, "regex replace")
-            p.write_text(new)
+            p.write_text(new, encoding="utf-8")
         return f"{n} replacement(s) in {path}"
 
     @t("extract_entities", "Pull URLs, emails, phone numbers, dates, numbers, hashtags and IPs "

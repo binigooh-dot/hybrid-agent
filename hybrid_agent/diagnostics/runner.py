@@ -95,6 +95,6 @@ def main(as_json: bool = False, only: str | None = None, save_dir=None) -> int:
     if save_dir and not only:  # the knowledge suite shows the latest full run
         from pathlib import Path
         Path(save_dir).mkdir(parents=True, exist_ok=True)
-        (Path(save_dir) / "diagnostics-latest.json").write_text(json.dumps(rep, indent=2))
+        (Path(save_dir) / "diagnostics-latest.json").write_text(json.dumps(rep, indent=2), encoding="utf-8")
     ok = rep["passed"] == rep["total"] and all(c["passed"] for c in rep["integrity"])
     return 0 if ok else 1

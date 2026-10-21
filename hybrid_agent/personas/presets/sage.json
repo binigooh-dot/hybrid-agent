@@ -11,10 +11,10 @@
   "weight": 1.0,
   "face": {
     "hair": "bun",
-    "shape": "round",
-    "eyes": "o",
+    "shape": "frame",
+    "eyes": "●",
     "glasses": true,
-    "nose": "^",
+    "nose": "▵",
     "mouth": "default",
     "beard": false,
     "earrings": true,

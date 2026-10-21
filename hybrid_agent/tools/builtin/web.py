@@ -5,16 +5,28 @@ Tools: fetch_url, web_search, extract_links, download_file
 Every address (and redirect) is checked by core/netguard.py before connecting:
 by default these tools only reach the public internet.
 
-web_search uses, in order:
-  1) a self-hosted SearXNG instance if SEARXNG_URL is set (JSON API, no key)
-  2) DuckDuckGo's HTML results page (no key; best-effort - it can
-     rate-limit or change its markup)
+web_search tries, in order, and says which one answered:
+  1) your self-hosted SearXNG if SEARXNG_URL is set (best: JSON API, no key)
+  2) DuckDuckGo's HTML page (no key; it often challenges automated clients)
+  3) Marginalia's free public search API (made for programs; results CC-BY-NC-SA)
+  4) Wikipedia search
+The agent always identifies itself honestly (User-Agent below); it never
+pretends to be a browser to get past a site's bot protection.
+
+Etiquette (Wikimedia's rules, followed everywhere): a User-Agent with contact
+details (set AGENT_CONTACT to your email or web page: identified clients get
+200 requests/minute on Wikipedia instead of 10), and a 429 "Too Many Requests"
+answer is honoured via Retry-After.
 """
 from __future__ import annotations
 
 import html
 import json
+import os
+import platform
 import re
+import socket
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -24,7 +36,18 @@ from ...security.netguard import check_url, opener
 from ..registry import S, ToolContext, ToolError, ToolRegistry
 
 CATEGORY = "web"
-UA = "Mozilla/5.0 (compatible; hybrid-agent/0.2)"
+
+
+def user_agent() -> str:
+    """Honest, Wikimedia-compliant: name/version (contact) library/version."""
+    from ... import __version__
+    contact = os.environ.get("AGENT_CONTACT", "").strip() or "self-hosted; owner contact not set"
+    return f"HybridAgent/{__version__} ({contact}) Python-urllib/{platform.python_version()}"
+
+
+class RateLimited(ToolError):
+    """HTTP 429 - the site asked us to slow down."""
+
 MAX_BYTES = 2_000_000            # pages read by fetch_url / extract_links
 MAX_DOWNLOAD_BYTES = 50_000_000  # files saved by download_file
 
@@ -85,20 +108,36 @@ def http_get(url: str, timeout: int = 30, headers: dict | None = None, max_bytes
     error rather than being silently cut off.
     """
     check_url(url, policy)
-    req = urllib.request.Request(url, headers={"User-Agent": UA, **(headers or {})})
-    try:
-        with opener(policy).open(req, timeout=timeout) as r:
-            declared = int(r.headers.get("Content-Length") or 0)
-            if strict_size and declared > max_bytes:
-                raise ToolError(f"{url} is {declared / 1e6:.1f} MB, over the {max_bytes / 1e6:.0f} MB limit.")
-            data = r.read(max_bytes + 1)
-            if len(data) > max_bytes and strict_size:
-                raise ToolError(f"{url} is larger than the {max_bytes / 1e6:.0f} MB limit.")
-            return r.headers.get("Content-Type", ""), data[:max_bytes]
-    except urllib.error.HTTPError as e:
-        raise ToolError(f"HTTP {e.code} fetching {url}") from None
-    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
-        raise ToolError(f"Could not fetch {url}: {getattr(e, 'reason', e)}") from None
+    req = urllib.request.Request(url, headers={"User-Agent": user_agent(), **(headers or {})})
+    for attempt in (1, 2):
+        try:
+            return _fetch(req, url, timeout, max_bytes, policy, strict_size)
+        except urllib.error.HTTPError as e:
+            wait = e.headers.get("Retry-After", "") if e.headers else ""
+            if e.code == 429 and attempt == 1 and wait.isdigit() and int(wait) <= 5:
+                time.sleep(int(wait))           # polite: wait as asked, then one retry
+                continue
+            if e.code == 429:
+                raise RateLimited(f"{urllib.parse.urlsplit(url).hostname} is rate-limiting requests (HTTP 429); "
+                                  "try again in a minute.") from None
+            raise ToolError(f"HTTP {e.code} fetching {url}") from None
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
+            if attempt == 1 and not isinstance(getattr(e, "reason", None), socket.gaierror):
+                time.sleep(0.5)                 # one retry for network blips (timeouts, resets)
+                continue
+            raise ToolError(f"Could not fetch {url}: {getattr(e, 'reason', e)}") from None
+    raise AssertionError("unreachable")
+
+
+def _fetch(req, url: str, timeout: int, max_bytes: int, policy: str, strict_size: bool) -> tuple[str, bytes]:
+    with opener(policy).open(req, timeout=timeout) as r:
+        declared = int(r.headers.get("Content-Length") or 0)
+        if strict_size and declared > max_bytes:
+            raise ToolError(f"{url} is {declared / 1e6:.1f} MB, over the {max_bytes / 1e6:.0f} MB limit.")
+        data = r.read(max_bytes + 1)
+        if len(data) > max_bytes and strict_size:
+            raise ToolError(f"{url} is larger than the {max_bytes / 1e6:.0f} MB limit.")
+        return r.headers.get("Content-Type", ""), data[:max_bytes]
 
 
 def decode(ctype: str, raw: bytes) -> str:
@@ -127,6 +166,49 @@ _BINARY_TYPES = ("application/pdf", "application/zip", "application/octet-stream
                  "video/", "font/", "application/x-")
 
 
+def _strip(fragment: str) -> str:
+    return html.unescape(re.sub(r"<[^>]+>", "", fragment)).strip()
+
+
+def search_duckduckgo(query: str, n: int) -> list[tuple[str, str, str]]:
+    _, body = http_get_text("https://html.duckduckgo.com/html/?" + urllib.parse.urlencode({"q": query}),
+                            headers={"Accept": "text/html", "Accept-Language": "en"}, timeout=10)
+    rows = []
+    for m in re.finditer(r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>.*?'
+                         r'class="result__snippet"[^>]*>(.*?)</a>', body, re.DOTALL):
+        href = html.unescape(m.group(1))
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(href).query)
+        rows.append((_strip(m.group(2)), q.get("uddg", [href])[0], _strip(m.group(3))))
+    return rows[:n]
+
+
+def search_marginalia(query: str, n: int) -> list[tuple[str, str, str]]:
+    data = http_get_json(f"https://api.marginalia.nu/public/search/{urllib.parse.quote(query)}?count={n}", timeout=10)
+    return [(r.get("title", ""), r.get("url", ""), r.get("description", "")[:300]) for r in data.get("results", [])]
+
+
+def search_wikipedia(query: str, n: int, lang: str = "en") -> list[tuple[str, str, str]]:
+    url = f"https://{lang}.wikipedia.org/w/api.php?" + urllib.parse.urlencode(
+        {"action": "query", "list": "search", "srsearch": query, "srlimit": n, "format": "json"})
+    hits = http_get_json(url, timeout=10).get("query", {}).get("search", [])
+    return [(h["title"], f"https://{lang}.wikipedia.org/wiki/" + urllib.parse.quote(h["title"].replace(" ", "_")),
+             html_to_text(h.get("snippet", ""))) for h in hits]
+
+
+def search_providers(ctx: ToolContext):
+    if ctx.searxng_url:
+        base = ctx.searxng_url.rstrip("/")
+
+        def searxng(query: str, n: int):
+            url = base + "/search?" + urllib.parse.urlencode({"q": query, "format": "json"})
+            return [(r.get("title", ""), r.get("url", ""), r.get("content", ""))
+                    for r in http_get_json(url, policy="local").get("results", [])[:n]]
+        yield "SearXNG", searxng
+    yield "DuckDuckGo", search_duckduckgo
+    yield "Marginalia", search_marginalia
+    yield "Wikipedia", search_wikipedia
+
+
 def register(reg: ToolRegistry) -> None:
     t = reg.group(CATEGORY, risk="network")
 
@@ -143,29 +225,18 @@ def register(reg: ToolRegistry) -> None:
     @t("web_search", "Search the web. Returns titles, URLs and snippets. Follow up with fetch_url.",
        S(query="string", max_results="integer?|Default 8"))
     def web_search(ctx: ToolContext, query: str, max_results: int = 8):
-        if ctx.searxng_url:
-            url = ctx.searxng_url.rstrip("/") + "/search?" + urllib.parse.urlencode(
-                {"q": query, "format": "json"})
-            results = http_get_json(url, policy="local").get("results", [])[:max_results]
-            rows = [(r.get("title", ""), r.get("url", ""), r.get("content", "")) for r in results]
-        else:
-            url = "https://html.duckduckgo.com/html/?" + urllib.parse.urlencode({"q": query})
-            _, body = http_get_text(url)
-            rows = []
-
-            def strip(fragment: str) -> str:
-                return html.unescape(re.sub(r"<[^>]+>", "", fragment)).strip()
-            for m in re.finditer(
-                    r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>.*?'
-                    r'class="result__snippet"[^>]*>(.*?)</a>', body, re.DOTALL):
-                href = html.unescape(m.group(1))
-                q = urllib.parse.parse_qs(urllib.parse.urlparse(href).query)
-                rows.append((strip(m.group(2)), q.get("uddg", [href])[0], strip(m.group(3))))
-                if len(rows) >= max_results:
-                    break
-        if not rows:
-            return "No results (the search provider may be rate-limiting; try again or set SEARXNG_URL)."
-        return "\n\n".join(f"{i}. {t}\n   {u}\n   {s}" for i, (t, u, s) in enumerate(rows, 1))
+        tried = []
+        for name, provider in search_providers(ctx):
+            try:
+                rows = provider(query, max_results)
+            except ToolError as e:
+                tried.append(f"{name}: {e}")
+                continue
+            if rows:
+                return f"(results from {name})\n\n" + "\n\n".join(
+                    f"{i}. {t}\n   {u}\n   {s}" for i, (t, u, s) in enumerate(rows[:max_results], 1))
+            tried.append(f"{name}: no results")
+        return "No results. Tried: " + "; ".join(tried) + ". For reliable search, run SearXNG and set SEARXNG_URL."
 
     @t("extract_links", "List the links on a web page (text + absolute URL). "
        "Optionally keep only links whose URL or text contains `contains`.",

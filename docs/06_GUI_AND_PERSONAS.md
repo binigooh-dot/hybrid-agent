@@ -16,9 +16,11 @@ Keep the terminal open; press Ctrl+C to stop.
 | Tab | What you can do |
 |---|---|
 | **Council** | Three numbered steps: ① ask a question (or tap an example), ② tap faces to choose who's in the room (★ marks the chair; "Change chair" rotates it), ③ pick how they decide from four cards (Roundtable, Debate, Vote, Critique). The stage then shows each member's **animated ASCII face**: eyes dart and thought dots grow while they *think*, the mouth moves while they *speak*, and they look *happy* or *concerned* depending on the vote. A conversation-style **Discussion** feed collects every contribution, and the **Decision** card shows the winner, animated vote bars and the chair's answer. |
+| **Tasks** | Queue and schedule work for the agents: an agent, a council or the safety drills; on demand, once, every N minutes, daily or on chosen weekdays; read-only by default. List + editor + run history (see [docs/08](08_DESKTOP_APP.md)). |
 | **Chat** | Talk to one agent, optionally as a persona (their face and greeting). Tool use is folded into a "🔧 used N tools" line under each reply; open it for the details. Suggestion chips help you get started. |
 | **Personas** | A **face builder** with menus (hair, head, eyes, nose, mouth), toggles (glasses, beard, earrings, freckles), colour swatches and a live animated preview for all seven expressions, plus name, role, personality, speaking style and (under *Advanced*) model, vote weight and tool profile. |
 | **Tools** | Search and filter all 80 tools by category, risk and profile, with a plain-English risk legend. |
+| **Control** | The local model engine (install/start/stop), models (download, switch, delete), the online check, settings, storage and Quit ([docs/08](08_DESKTOP_APP.md)). |
 | **Safety** | Status cards (sandbox, approvals, safe mode, free disk, protected paths, package integrity, undo history), an **Undo history** with one-click **Restore**, the safety fire drills and the setup check. A dot on the tab shows the overall state: green = fully protected, amber = no strict sandbox, red = reduced protection. |
 | **Guide ↗** | The Agent Builder Knowledge Suite (also at `docs/agent_builder_suite.html`). |
 
@@ -86,40 +88,46 @@ python -m hybrid_agent council --personas sage,vex,nova -p "..."
 
 ## Faces
 
-Faces are **ASCII art** (`personas/faces.py`): 7 lines × 16 characters of plain text. No images, no
-downloads, no image model; all seven expressions plus the animation frames for one persona come to about
-2 KB (the old SVG faces were ~14 KB each).
+Faces are **text** (`personas/faces.py`): 7 lines × 16 characters drawn with Unicode box-drawing and block
+characters, so the outlines are solid lines rather than dashes. All seven expressions plus the animation
+frames for one persona come to about 2,500 characters.
 
 ```
-   /\/\/\/\/          hair       spiky curly wavy bun mohawk flat bald
-  +---------+         head       oval ( | )  round ( ( ) )  square ( [ ] )
-  [  -   -  ]         brows      change with the mood
-o [ [*]-[*] ]o        eyes       o 0 @ * Q .   + glasses, earrings
-  [  . L .  ]         nose       > < ^ L v J   + freckles
-  [   (O)   ]  ))     mouth      default / wide / small; talks in 4 frames
-  \vvvvvvvvv/         chin       or beard
+   ▄▄▄▄▄▄▄▄▄▄▄          hair    ▄▄▄ flat  ╱╲╱ spiky  ≈≈≈ wavy  ○◦○ curly  ▄█▄ bun  ▐█▌ mohawk  bald
+  ╭─────────╮           head    ╭─╮ oval   ┌─┐ square   ┏━┓ bold   ╔═╗ frame
+  │  ─   ─  │           brows   change with the mood:  ╭ ╮ happy   ╱ ╲ concerned   ▔ ▔ surprised
+ ◦│ (●)─(●) │◦          eyes    ● ○ ◉ ◕ ■ •   + glasses (●)─(●), earrings ◦
+  │  ∙ ╯ ∙  │           nose    ╯ ╰ ▵ ┘ ▿ ∙   + freckles
+  │   ╰─╯   │  ))       mouth   default / wide / small; talking opens it: ───  ╶▄╴  ▐█▌
+  ╰▒▒▒▒▒▒▒▒▒╯           chin or beard
 ```
-
-Analogy: a paper-doll kit. Each persona keeps the same kit; an **expression** only swaps the brows, eyes
-and mouth: `neutral`, `thinking`, `speaking`, `happy`, `concerned`, `surprised`, `skeptical`.
 
 | Animation | Frames | What moves |
 |---|---|---|
-| speaking | 4 | mouth opens and closes, sound marks `))` pulse |
-| thinking | 4 | eyes glance left and right, thought dots `. .. ...` grow |
-| idle | 1 + blink | eyes close for a moment every few seconds |
+| speaking | 4 | the mouth opens and closes, sound marks `))` pulse |
+| thinking | 4 | eyes glance left and right (◔), thought dots `∙ ° ○` rise |
+| idle | 1 + blink | the eyes close (`─`) for a moment every few seconds |
 
-The browser runs **one** shared 230 ms timer for every face on screen, and simply swaps the text of a
-`<pre>`, so there's no measurable CPU cost. Animation switches off when your system asks for reduced motion.
+**Why they look crisp everywhere.** Box-drawing characters only join into solid lines if the font draws
+them to the full line height, and fonts differ (research: [Source Code Pro issue #57](https://github.com/adobe-fonts/source-code-pro/issues/57),
+[suckless st thread](https://lists.suckless.org/dev/1912/33681.html)). So the GUI ships its own font: an 18 KB
+subset of **JetBrains Mono** (`gui/static/fonts/`, licence alongside), shown at line-height 1 for a tight
+face. Measured in Chromium at line-heights 1.0 to 1.32, the outlines join at every one; the system's default
+monospace font showed gaps and different eye shapes. A test checks that every character any face can
+produce is in the bundled font, and `diagnose` checks the presets.
+
+Analogy: a paper-doll kit. Each persona keeps the same kit; an **expression** only swaps the brows, eyes
+and mouth. The browser runs **one** shared timer for every face on screen and only swaps the text of a
+`<pre>`, so animation costs almost nothing. It switches off when your system asks for reduced motion.
 Every part comes from a fixed menu and faces are written with `textContent`, so a hand-edited persona file
-can't inject anything into the page or the terminal. (Older persona files with an `"image"` field still load;
-the field is ignored.)
+can't inject anything. Persona files made before v1.1, with plain-ASCII parts like `"eyes": "o"`, are upgraded
+automatically.
 
 ## Groundwork: where to take it next
 
 | Next step | How it plugs in |
 |---|---|
-| **More face parts** | Add entries to `HAIR`, `EYES`, `NOSES` or a mouth style in `faces.py`; the GUI menus are built from `/api/meta` automatically |
+| **More face parts** | Add entries to `HAIR`, `EYES`, `NOSES` or a mouth style in `faces.py` (characters must be in `FONT_RANGES`; widen the font subset if needed). The GUI menus are built from `/api/meta` automatically |
 | **Voices (text-to-speech)** | Add `"voice"` to the persona; on `member_done`, send the text to a local TTS (e.g. Piper) and play it. The *speaking* animation already runs while a member talks |
 | **Faces in the terminal** | `render_face(face, "speaking", frame)` returns plain text - print it from the CLI with ANSI colour |
 | **Per-persona memory** | Prefix memory keys with the persona id, or give each persona its own memory file |

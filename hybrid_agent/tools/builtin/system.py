@@ -20,7 +20,7 @@ CATEGORY = "system"
 
 def _mem_gb() -> str:
     try:
-        with open("/proc/meminfo") as f:
+        with open("/proc/meminfo", encoding="utf-8") as f:
             info = dict(line.split(":", 1) for line in f)
         total = int(info["MemTotal"].split()[0]) / 1024 ** 2
         avail = int(info["MemAvailable"].split()[0]) / 1024 ** 2

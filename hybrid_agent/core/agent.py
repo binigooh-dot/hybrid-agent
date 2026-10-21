@@ -122,7 +122,7 @@ class Agent:
         data = redact_obj(data)  # secrets never reach the log file or the GUI
         self.on_event(kind, {"agent": self.name, **data})
         if self._log_path:
-            with self._log_path.open("a") as f:
+            with self._log_path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps({"t": time.time(), "agent": self.name, "kind": kind, **data},
                                    default=str) + "\n")
 

@@ -25,7 +25,7 @@ class GuiServerTests(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp())
         cls.cfg = Config(backend="scripted", workspace=tmp / "ws", log_dir=tmp / "logs", persona_dir=tmp / "personas")
         cls.cfg.workspace.mkdir()
-        cls.srv, cls.app = create_server(cls.cfg, port=0)
+        cls.srv, cls.app = create_server(cls.cfg, port=0, state=tmp)
         threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
         cls.base = f"http://127.0.0.1:{cls.app.port}"
 
@@ -109,14 +109,14 @@ class GuiServerTests(unittest.TestCase):
     def test_safety_and_restore(self):
         from hybrid_agent.security.backup import snapshot
         f = self.cfg.workspace / "keep.txt"
-        f.write_text("v1")
+        f.write_text("v1", encoding="utf-8")
         entry = snapshot(self.cfg.workspace, f, "edit")
-        f.write_text("v2")
+        f.write_text("v2", encoding="utf-8")
         _, s, _ = self.req("GET", "/api/safety")
         self.assertIn(entry["id"], [b["id"] for b in s["backups"]])
         self.assertGreater(s["protected"], 20)
         self.assertEqual(self.req("POST", "/api/restore", {"id": entry["id"]})[1], {"restored": "keep.txt"})
-        self.assertEqual(f.read_text(), "v1")
+        self.assertEqual(f.read_text(encoding="utf-8"), "v1")
         self.assertEqual(self.req("POST", "/api/restore", {"id": "nope"})[0], 400)
 
     # ----------------------------------------------------------------- api
@@ -208,10 +208,32 @@ class GuideTests(unittest.TestCase):
 
     def test_env_vars_documented(self):
         root = Path(__file__).resolve().parent.parent
-        keys = {line.split("=")[0].lstrip("# ").strip() for line in (root / ".env.example").read_text().splitlines()
+        keys = {line.split("=")[0].lstrip("# ").strip() for line in (root / ".env.example").read_text(encoding="utf-8").splitlines()
                 if "=" in line and line.lstrip("# ").split("=")[0].strip().isupper()}
         self.assertEqual(keys - {k for k, _, _ in ENV_VARS}, set())
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FaceFontTests(unittest.TestCase):
+    """Every character a face can contain is in the bundled font, so faces never fall back to another font."""
+
+    def test_font_covers_every_face_character(self):
+        try:
+            from fontTools.ttLib import TTFont
+        except ImportError:
+            self.skipTest("fontTools not installed (pip install fonttools brotli)")
+        from hybrid_agent.personas import load_presets
+        from hybrid_agent.personas.faces import random_face, render_all
+        font = Path(__file__).resolve().parent.parent / "hybrid_agent" / "gui" / "static" / "fonts" / "face-mono.woff2"
+        cmap = TTFont(font).getBestCmap()
+        faces = [p.face for p in load_presets()] + [random_face(str(i)) for i in range(200)]
+        chars = {c for f in faces for frames in render_all(f).values() for fr in frames for c in fr} - {"\n"}
+        self.assertEqual(sorted(c for c in chars if ord(c) not in cmap), [])
+
+    def test_legacy_ascii_faces_are_upgraded(self):
+        from hybrid_agent.personas.faces import normalise_face
+        f = normalise_face({"shape": "round", "eyes": "o", "nose": ">"})
+        self.assertEqual((f["shape"], f["eyes"], f["nose"]), ("frame", "●", "╯"))

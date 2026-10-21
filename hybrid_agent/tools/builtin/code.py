@@ -10,8 +10,8 @@ from __future__ import annotations
 import ast
 import json
 import re
-import sys
 
+from ...core.pyexe import user_command
 from ...security.guards import read_text_limited, resolve_in_workspace
 from ...security.xmlsafe import safe_xml_fromstring
 from ..registry import S, ToolContext, ToolError, ToolRegistry
@@ -110,11 +110,11 @@ def register(reg: ToolRegistry) -> None:
        risk="execute", requires_approval=True)
     def run_tests(ctx: ToolContext, path: str = ".", pattern: str | None = None):
         resolve_in_workspace(ctx.workspace, path)
-        has_pytest = "exit code: 0" in run_process([sys.executable, "-c", "import pytest"], ctx)
+        has_pytest = "exit code: 0" in run_process([*user_command(), "-c", "import pytest"], ctx)
         if has_pytest:
-            argv = [sys.executable, "-m", "pytest", "-q", path] + (["-k", pattern] if pattern else [])
+            argv = [*user_command(), "-m", "pytest", "-q", path] + (["-k", pattern] if pattern else [])
         else:
-            argv = [sys.executable, "-m", "unittest", "discover", "-s", path, "-v"] + \
+            argv = [*user_command(), "-m", "unittest", "discover", "-s", path, "-v"] + \
                    (["-k", pattern] if pattern else [])
         return run_process(argv, ctx, timeout=max(ctx.shell_timeout, 300))
 
