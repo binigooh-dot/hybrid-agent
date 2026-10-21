@@ -19,8 +19,9 @@ Wine hadn't shown. macOS sat in GitHub's queue and never started, which blocked 
 
 Also:
 - **New `tests/test_docs.py`:** every markdown link, every repo path in backticks, every link in the guide,
-  the download file names and the workflow's scripts must exist. It found `personas/faces.py`, which really
-  lives at `hybrid_agent/personas/faces.py`; the top-level `personas/` is your own persona files.
+  the download file names and the workflow's scripts must exist. It found docs naming the faces module by
+  a short path that pointed at the top-level personas folder (your own persona files) instead of
+  `hybrid_agent/personas/faces.py`.
 - **README:** links to the latest release for downloads.
 - **Windows dry run:** the whole suite ran on Windows Python 3.12 under Wine before pushing. The only
   failures were two Wine-only differences (no git in Wine; Wine's symlinks), both of which pass on the real
