@@ -6,6 +6,7 @@
 |---|---|
 | `.env.example` | [CONFIG] Every setting with its default; copy to .env |
 | `.github/workflows/build.yml` |  |
+| `.github/workflows/macos.yml` |  |
 | `.gitignore` | [REPO] Files git should ignore (secrets, workspace, logs) |
 | `NOTES.md` | [DOCS] Build notes |
 | `README.md` | [DOCS] Hybrid Agent: local agents, a council with faces, and Claude when you want it |

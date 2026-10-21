@@ -23,6 +23,14 @@ Also:
   a short path that pointed at the top-level personas folder (your own persona files) instead of
   `hybrid_agent/personas/faces.py`.
 - **README:** links to the latest release for downloads.
+- **Run #5 annotations** (all fixed):
+  - macOS was never picked up ("not acquired by Runner… capacity constraints for macOS arm64"). macOS now
+    has its own workflow (`macos.yml`, on releases and on demand) on the Intel pool (`macos-15-intel`); the
+    build also runs on Apple silicon via Rosetta 2. Its queue can no longer fail or block the main build.
+  - "Node.js 20 is deprecated": moved to checkout@v5, setup-python@v6, upload-artifact@v6,
+    download-artifact@v7 and action-gh-release@v3 (each verified from its action.yml). A test keeps it that way.
+  - "ubuntu-latest will migrate to Ubuntu 26": pinned `ubuntu-24.04`, so the Linux download (which needs
+    a glibc at least as new as the build machine's) keeps working on more systems.
 - **Windows dry run:** the whole suite ran on Windows Python 3.12 under Wine before pushing. The only
   failures were two Wine-only differences (no git in Wine; Wine's symlinks), both of which pass on the real
   Windows runner.

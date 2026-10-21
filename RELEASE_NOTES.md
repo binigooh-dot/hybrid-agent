@@ -8,8 +8,8 @@ A tool-using agent and a council of persona agents that run on **your own comput
 | File | For |
 |---|---|
 | `HybridAgent-1.1.1-windows-x64.zip` | Windows 10/11 (64-bit): unzip, double-click **HybridAgent.exe** |
-| `HybridAgent-1.1.1-linux-x86_64.zip` | Linux x86-64: unzip, run `./HybridAgent` (install `bubblewrap` for the strict sandbox) |
-| `HybridAgent-1.1.1-macos-arm64.zip` | macOS (Apple silicon), when the macOS build finishes: unzip, run `./HybridAgent` (unsigned: right-click → Open the first time) |
+| `HybridAgent-1.1.1-linux-x86_64.zip` | Linux x86-64 with glibc 2.39+ (Ubuntu 24.04, Debian 13, Fedora 40 or newer): unzip, run `./HybridAgent` (install `bubblewrap` for the strict sandbox) |
+| `HybridAgent-1.1.1-macos-x86_64.zip` | macOS (Intel, and Apple silicon via Rosetta 2), added when the macOS build finishes: unzip, run `./HybridAgent` (unsigned: right-click → Open the first time) |
 | `hybrid_agent-1.1.1-py3-none-any.whl` / `.tar.gz` | Python 3.10+ anywhere: `pip install …whl`, then `hybrid-agent studio` |
 
 Then open the **Control** tab: *Install engine* → *Download* a model → *Run check* (confirms the agents can
@@ -23,8 +23,11 @@ Windows may show a SmartScreen warning because the app isn't code-signed ("More 
   command naming them wasn't refused there. They are now resolved on every OS.
 - File tools now always report paths with `/` (they returned `src\m.py` on Windows).
 - The generated file map sorted differently on Windows (case-insensitive paths).
-- The build workflow: a slow macOS queue no longer blocks the Windows/Linux downloads, and the release
-  checks that the Windows and Linux builds are present before publishing.
+- The build workflows: macOS has its own workflow on the Intel runner pool, because GitHub's arm64 Mac
+  runners were too busy to pick the job up, so it can no longer block or fail the Windows/Linux build. The
+  release checks that the Windows and Linux builds are present before publishing. Every action moved to
+  its Node 24 version (Node 20 is deprecated), and Linux builds are pinned to Ubuntu 24.04 so the download
+  keeps working on older systems.
 - Docs: every link and file path they mention is now checked by a test.
 
 ## New in 1.1 (the desktop app)

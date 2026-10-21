@@ -46,9 +46,24 @@ class DocLinkTests(unittest.TestCase):
         self.assertIn(__version__, (ROOT / "RELEASE_NOTES.md").read_text(encoding="utf-8").splitlines()[0])
 
     def test_workflow_uses_files_that_exist(self):
-        wf = (ROOT / ".github" / "workflows" / "build.yml").read_text(encoding="utf-8")
+        wf = "".join(f.read_text(encoding="utf-8") for f in (ROOT / ".github" / "workflows").glob("*.yml"))
         for path in re.findall(r"python (scripts/[\w./-]+\.py)", wf) + ["RELEASE_NOTES.md", "packaging/HybridAgent.spec"]:
             self.assertTrue((ROOT / path).exists(), path)
+
+
+class WorkflowTests(unittest.TestCase):
+    # first major version of each action that runs on Node 24 (Node 20 is deprecated on GitHub's runners);
+    # checked against each action's action.yml ("using: node24")
+    NODE24 = {"actions/checkout": 5, "actions/setup-python": 6, "actions/upload-artifact": 6,
+              "actions/download-artifact": 7, "softprops/action-gh-release": 3}
+
+    def test_actions_are_on_node24_versions(self):
+        old = []
+        for f in (ROOT / ".github" / "workflows").glob("*.yml"):
+            for action, major in re.findall(r"uses:\s*([\w.-]+/[\w.-]+)@v(\d+)", f.read_text(encoding="utf-8")):
+                if action in self.NODE24 and int(major) < self.NODE24[action]:
+                    old.append(f"{f.name}: {action}@v{major}")
+        self.assertEqual(old, [])
 
 
 if __name__ == "__main__":
