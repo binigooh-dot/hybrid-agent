@@ -214,7 +214,7 @@ model asks for tool ─► schema check ─► approval (✋ tools) ─► safet
 
 ```python
 from hybrid_agent.tools import S, ToolError
-from hybrid_agent.core.safety import resolve_in_workspace
+from hybrid_agent.security.guards import resolve_in_workspace
 
 @registry.tool(
     "word_count",                                        # the name the model calls

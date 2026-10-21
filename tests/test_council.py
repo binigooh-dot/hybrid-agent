@@ -9,8 +9,15 @@ from pathlib import Path
 
 from hybrid_agent.backends import BackendUnavailable, CannedBackend
 from hybrid_agent.core.config import Config
-from hybrid_agent.council import (Blackboard, Council, CouncilError, MemberSpec, PROTOCOLS, parse_ballot,
-                                  tally)
+from hybrid_agent.council import (
+    PROTOCOLS,
+    Blackboard,
+    Council,
+    CouncilError,
+    MemberSpec,
+    parse_ballot,
+    tally,
+)
 
 
 def cfg(**kw) -> Config:

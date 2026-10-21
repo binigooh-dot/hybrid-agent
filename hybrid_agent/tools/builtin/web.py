@@ -2,6 +2,9 @@
 
 Tools: fetch_url, web_search, extract_links, download_file
 
+Every address (and redirect) is checked by core/netguard.py before connecting:
+by default these tools only reach the public internet.
+
 web_search uses, in order:
   1) a self-hosted SearXNG instance if SEARXNG_URL is set (JSON API, no key)
   2) DuckDuckGo's HTML results page (no key; best-effort - it can
@@ -17,17 +20,19 @@ import urllib.parse
 import urllib.request
 from html.parser import HTMLParser
 
-from ...core.safety import resolve_in_workspace
+from ...security.guards import resolve_in_workspace
+from ...security.netguard import check_url, opener
 from ..registry import S, ToolContext, ToolError, ToolRegistry
 
 CATEGORY = "web"
 UA = "Mozilla/5.0 (compatible; hybrid-agent/0.2)"
-MAX_BYTES = 2_000_000
+MAX_BYTES = 2_000_000            # pages read by fetch_url / extract_links
+MAX_DOWNLOAD_BYTES = 50_000_000  # files saved by download_file
 
 
 class _TextExtractor(HTMLParser):
-    SKIP = {"script", "style", "noscript", "svg", "head"}
-    BLOCK = {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "section", "article"}
+    SKIP = frozenset({"script", "style", "noscript", "svg", "head"})
+    BLOCK = frozenset({"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "section", "article"})
 
     def __init__(self):
         super().__init__()
@@ -68,25 +73,42 @@ def html_to_text(page: str) -> str:
     return re.sub(r"\n\s*\n+", "\n\n", text).strip()
 
 
-def http_get(url: str, timeout: int = 30, headers: dict | None = None,
-             max_bytes: int = MAX_BYTES) -> tuple[str, bytes]:
-    """GET a URL -> (content-type, raw bytes). Shared by web/knowledge tools."""
-    if not url.startswith(("http://", "https://")):
-        raise ToolError("Only http:// and https:// URLs are allowed.")
+def policy_for(ctx: ToolContext) -> str:
+    return "local" if ctx.allow_private_network else "public"
+
+
+def http_get(url: str, timeout: int = 30, headers: dict | None = None, max_bytes: int = MAX_BYTES,
+             policy: str = "public", strict_size: bool = False) -> tuple[str, bytes]:
+    """GET a URL -> (content-type, raw bytes). Shared by web/knowledge tools.
+
+    The address (and every redirect) is checked against `policy` before any
+    connection is made. If strict_size, a body larger than max_bytes is an
+    error rather than being silently cut off.
+    """
+    check_url(url, policy)
     req = urllib.request.Request(url, headers={"User-Agent": UA, **(headers or {})})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return r.headers.get("Content-Type", ""), r.read(max_bytes)
+        with opener(policy).open(req, timeout=timeout) as r:
+            declared = int(r.headers.get("Content-Length") or 0)
+            if strict_size and declared > max_bytes:
+                raise ToolError(f"{url} is {declared / 1e6:.1f} MB, over the {max_bytes / 1e6:.0f} MB limit.")
+            data = r.read(max_bytes + 1)
+            if len(data) > max_bytes and strict_size:
+                raise ToolError(f"{url} is larger than the {max_bytes / 1e6:.0f} MB limit.")
+            return r.headers.get("Content-Type", ""), data[:max_bytes]
     except urllib.error.HTTPError as e:
-        raise ToolError(f"HTTP {e.code} fetching {url}")
-    except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
-        raise ToolError(f"Could not fetch {url}: {e}")
+        raise ToolError(f"HTTP {e.code} fetching {url}") from None
+    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
+        raise ToolError(f"Could not fetch {url}: {getattr(e, 'reason', e)}") from None
 
 
 def http_get_text(url: str, **kw) -> tuple[str, str]:
     ctype, raw = http_get(url, **kw)
     m = re.search(r"charset=([\w-]+)", ctype)
-    return ctype, raw.decode(m.group(1) if m else "utf-8", errors="replace")
+    try:
+        return ctype, raw.decode(m.group(1) if m else "utf-8", errors="replace")
+    except LookupError:  # unknown charset name from the server
+        return ctype, raw.decode("utf-8", errors="replace")
 
 
 def http_get_json(url: str, **kw):
@@ -94,17 +116,31 @@ def http_get_json(url: str, **kw):
     try:
         return json.loads(body)
     except json.JSONDecodeError:
-        raise ToolError(f"Expected JSON from {url}, got: {body[:200]}")
+        raise ToolError(f"Expected JSON from {url}, got: {body[:200]}") from None
+
+
+_BINARY_TYPES = ("application/pdf", "application/zip", "application/octet-stream", "image/", "audio/",
+                 "video/", "font/", "application/x-")
 
 
 def register(reg: ToolRegistry) -> None:
-    t = lambda *a, **k: reg.tool(*a, category=CATEGORY, risk="network", **k)  # noqa: E731
+    t = reg.group(CATEGORY, risk="network")
 
     @t("fetch_url", "Download a web page or text file and return its readable text.",
        S(url="string"))
     def fetch_url(ctx: ToolContext, url: str):
-        ctype, body = http_get_text(url)
-        return html_to_text(body) if "html" in ctype or body.lstrip().startswith("<") else body
+        ctype, raw = http_get(url, policy=policy_for(ctx))
+        if any(ctype.startswith(b) for b in _BINARY_TYPES):
+            return f"{url} is binary ({ctype}, {len(raw)} bytes). Use download_file to save it."
+        _, body = ctype, raw.decode("utf-8", errors="replace")
+        m = re.search(r"charset=([\w-]+)", ctype)
+        if m:
+            try:
+                body = raw.decode(m.group(1), errors="replace")
+            except LookupError:
+                pass
+        text = html_to_text(body) if "html" in ctype or body.lstrip().startswith("<") else body
+        return text + ("\n...[page truncated at 2 MB]" if len(raw) >= MAX_BYTES else "")
 
     @t("web_search", "Search the web. Returns titles, URLs and snippets. Follow up with fetch_url.",
        S(query="string", max_results="integer?|Default 8"))
@@ -112,13 +148,15 @@ def register(reg: ToolRegistry) -> None:
         if ctx.searxng_url:
             url = ctx.searxng_url.rstrip("/") + "/search?" + urllib.parse.urlencode(
                 {"q": query, "format": "json"})
-            results = http_get_json(url).get("results", [])[:max_results]
+            results = http_get_json(url, policy="local").get("results", [])[:max_results]
             rows = [(r.get("title", ""), r.get("url", ""), r.get("content", "")) for r in results]
         else:
             url = "https://html.duckduckgo.com/html/?" + urllib.parse.urlencode({"q": query})
             _, body = http_get_text(url)
             rows = []
-            strip = lambda s: html.unescape(re.sub(r"<[^>]+>", "", s)).strip()  # noqa: E731
+
+            def strip(fragment: str) -> str:
+                return html.unescape(re.sub(r"<[^>]+>", "", fragment)).strip()
             for m in re.finditer(
                     r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>.*?'
                     r'class="result__snippet"[^>]*>(.*?)</a>', body, re.DOTALL):
@@ -135,7 +173,7 @@ def register(reg: ToolRegistry) -> None:
        "Optionally keep only links whose URL or text contains `contains`.",
        S(url="string", contains="string?"))
     def extract_links(ctx: ToolContext, url: str, contains: str | None = None):
-        _, body = http_get_text(url)
+        _, body = http_get_text(url, policy=policy_for(ctx))
         p = _TextExtractor()
         p.feed(body)
         seen, rows = set(), []
@@ -153,7 +191,10 @@ def register(reg: ToolRegistry) -> None:
        S(url="string", path="string|Where to save it in the workspace"), requires_approval=True)
     def download_file(ctx: ToolContext, url: str, path: str):
         dest = resolve_in_workspace(ctx.workspace, path)
-        ctype, raw = http_get(url, timeout=120, max_bytes=50_000_000)
+        ctype, raw = http_get(url, timeout=120, max_bytes=MAX_DOWNLOAD_BYTES, policy=policy_for(ctx),
+                              strict_size=True)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(raw)
+        tmp = dest.with_name(dest.name + ".part")
+        tmp.write_bytes(raw)
+        tmp.replace(dest)
         return f"Saved {len(raw)} bytes ({ctype or 'unknown type'}) to {path}"

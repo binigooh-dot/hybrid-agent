@@ -10,17 +10,19 @@ import datetime as dt
 import math
 import operator
 import statistics as st
+from collections.abc import Callable
+from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..registry import S, ToolContext, ToolError, ToolRegistry
 
 # ------------------------------------------------------------------ calculator
-_OPS = {
+_OPS: dict[type, Callable[..., Any]] = {
     ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
     ast.Div: operator.truediv, ast.FloorDiv: operator.floordiv, ast.Mod: operator.mod,
     ast.Pow: operator.pow, ast.USub: operator.neg, ast.UAdd: operator.pos,
 }
-_FUNCS = {name: getattr(math, name) for name in
+_FUNCS: dict[str, Callable[..., Any]] = {name: getattr(math, name) for name in
           ("sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "log", "log10", "log2", "exp",
            "floor", "ceil", "factorial", "radians", "degrees", "gcd", "lcm", "comb", "perm", "hypot")}
 _FUNCS.update(abs=abs, round=round, min=min, max=max)
@@ -51,11 +53,11 @@ def safe_eval(expr: str) -> float | int:
     try:
         return ev(ast.parse(expr.replace("^", "**"), mode="eval"))
     except SyntaxError as e:
-        raise ToolError(f"Syntax error: {e.msg}")
+        raise ToolError(f"Syntax error: {e.msg}") from None
     except ZeroDivisionError:
-        raise ToolError("Division by zero.")
+        raise ToolError("Division by zero.") from None
     except (ValueError, OverflowError) as e:
-        raise ToolError(f"Math error: {e}")
+        raise ToolError(f"Math error: {e}") from None
 
 
 # --------------------------------------------------------------- unit convert
@@ -112,7 +114,7 @@ def _zone(name: str | None):
     try:
         return ZoneInfo(name)
     except (ZoneInfoNotFoundError, ValueError):
-        raise ToolError(f"Unknown timezone '{name}'. Use IANA names like 'Europe/London', 'America/New_York', 'UTC'.")
+        raise ToolError(f"Unknown timezone '{name}'. Use IANA names like 'Europe/London', 'America/New_York', 'UTC'.") from None
 
 
 def _parse_dt(s: str) -> dt.datetime:
@@ -121,12 +123,12 @@ def _parse_dt(s: str) -> dt.datetime:
     try:
         return dt.datetime.fromisoformat(s)
     except ValueError:
-        raise ToolError(f"Can't parse date '{s}'. Use ISO format like 2026-03-01 or 2026-03-01T14:30.")
+        raise ToolError(f"Can't parse date '{s}'. Use ISO format like 2026-03-01 or 2026-03-01T14:30.") from None
 
 
 def register(reg: ToolRegistry) -> None:
-    m = lambda *a, **k: reg.tool(*a, category="math", **k)  # noqa: E731
-    tt = lambda *a, **k: reg.tool(*a, category="time", **k)  # noqa: E731
+    m = reg.group("math")
+    tt = reg.group("time")
 
     @m("calculator", "Evaluate an arithmetic expression exactly, e.g. '(3.5*12)**2 / sqrt(7)'. "
        "Functions: sqrt sin cos tan log log10 exp floor ceil factorial gcd comb ... "
@@ -142,7 +144,7 @@ def register(reg: ToolRegistry) -> None:
         xs = [float(x) for x in numbers]
         if not xs:
             raise ToolError("Give at least one number.")
-        out = {"count": len(xs), "sum": sum(xs), "mean": st.fmean(xs), "median": st.median(xs),
+        out: dict[str, Any] = {"count": len(xs), "sum": sum(xs), "mean": st.fmean(xs), "median": st.median(xs),
                "min": min(xs), "max": max(xs)}
         if len(xs) > 1:
             out.update(stdev=st.stdev(xs), variance=st.variance(xs),
@@ -163,7 +165,7 @@ def register(reg: ToolRegistry) -> None:
         try:
             n = int(number.strip().lower().removeprefix("0x").removeprefix("0b").removeprefix("0o"), from_base)
         except ValueError:
-            raise ToolError(f"'{number}' is not a valid base-{from_base} number.")
+            raise ToolError(f"'{number}' is not a valid base-{from_base} number.") from None
         digits, sign, n = "0123456789abcdefghijklmnopqrstuvwxyz", "-" if n < 0 else "", abs(n)
         out = ""
         while True:

@@ -11,10 +11,12 @@ import tarfile
 import zipfile
 from pathlib import Path
 
-from ...core.safety import resolve_in_workspace
+from ...security.guards import resolve_in_workspace
 from ..registry import S, ToolContext, ToolError, ToolRegistry
 
 CATEGORY = "archives"
+MAX_EXTRACT_BYTES = 1_000_000_000   # total uncompressed size allowed (zip-bomb protection)
+MAX_ENTRIES = 20_000
 
 
 def _is_tar(name: str) -> bool:
@@ -28,7 +30,7 @@ def _tar_mode(name: str, write: bool) -> str:
 
 
 def register(reg: ToolRegistry) -> None:
-    t = lambda *a, **k: reg.tool(*a, category=CATEGORY, **k)  # noqa: E731
+    t = reg.group(CATEGORY)
 
     @t("archive_list", "List the files inside a .zip or .tar archive.", S(path="string"))
     def archive_list(ctx: ToolContext, path: str):
@@ -65,7 +67,7 @@ def register(reg: ToolRegistry) -> None:
                 for f in files:
                     z.write(f, f.relative_to(root))
         elif _is_tar(output):
-            with tarfile.open(out, _tar_mode(output, True)) as tf:
+            with tarfile.open(out, _tar_mode(output, True)) as tf:  # type: ignore[call-overload]  # mode is computed
                 for f in files:
                     tf.add(f, str(f.relative_to(root)))
         else:
@@ -89,23 +91,35 @@ def register(reg: ToolRegistry) -> None:
                 raise ToolError(f"Archive entry '{name}' would escape the destination; aborted.")
             return target
 
+        def check_budget(sizes: list[int]) -> None:
+            if len(sizes) > MAX_ENTRIES:
+                raise ToolError(f"Archive has {len(sizes)} entries (limit {MAX_ENTRIES}); refusing.")
+            if sum(sizes) > MAX_EXTRACT_BYTES:
+                raise ToolError(f"Archive would expand to {sum(sizes) / 1e6:.0f} MB (limit "
+                                f"{MAX_EXTRACT_BYTES / 1e6:.0f} MB) - possible zip bomb; refusing.")
+
         if zipfile.is_zipfile(p):
             with zipfile.ZipFile(p) as z:
-                for n in z.namelist():
-                    safe(n)
-                z.extractall(dest)
-                count = len(z.namelist())
+                infos = z.infolist()
+                check_budget([i.file_size for i in infos])
+                for i in infos:
+                    safe(i.filename)
+                # Reviewed (B202): members validated above
+                z.extractall(dest, members=infos)  # noqa: S202 - every member is validated above  # nosec B202
+                count = len(infos)
         elif tarfile.is_tarfile(p):
             with tarfile.open(p) as tf:
                 members = tf.getmembers()
+                check_budget([m.size for m in members])
                 for m in members:
                     safe(m.name)
-                    if m.issym() or m.islnk():
-                        raise ToolError(f"Archive contains a link ({m.name}); refusing to extract.")
+                    if m.issym() or m.islnk() or m.isdev():
+                        raise ToolError(f"Archive contains a link or device ({m.name}); refusing to extract.")
                 try:
-                    tf.extractall(dest, filter="data")  # extra safety on newer Pythons
-                except TypeError:                         # older 3.10/3.11 patch releases
-                    tf.extractall(dest)                   # members already checked above
+                    tf.extractall(dest, members=members, filter="data")  # extra safety on newer Pythons
+                except TypeError:  # older 3.10/3.11 patch releases lack filter=; members were checked above
+                    # Reviewed (B202): members validated above
+                    tf.extractall(dest, members=members)  # noqa: S202 - every member is validated above  # nosec B202
                 count = len(members)
         else:
             raise ToolError("Not a zip or tar archive.")

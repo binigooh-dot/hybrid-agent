@@ -5,7 +5,13 @@ import unittest
 from pathlib import Path
 
 from hybrid_agent.core.messages import ToolCall
-from hybrid_agent.tools import PROFILES, S, ToolContext, build_full_registry, build_registry
+from hybrid_agent.tools import (
+    PROFILES,
+    S,
+    ToolContext,
+    build_full_registry,
+    build_registry,
+)
 from hybrid_agent.tools.profiles import apply_profile
 from hybrid_agent.tools.registry import RISK_LEVELS, check_signature, validate_args
 
@@ -78,7 +84,7 @@ class ProfileTests(unittest.TestCase):
     def test_readonly_has_no_write_or_execute(self):
         for prof in ("readonly", "readonly_all"):
             reg = build_registry(self.ctx, prof)
-            self.assertFalse([n for n in reg.names() if reg.get(n).risk in {"write", "execute"}], prof)
+            self.assertFalse([n for n in reg.names() if reg[n].risk in {"write", "execute"}], prof)
 
     def test_modifiers(self):
         full = build_full_registry(self.ctx)
@@ -112,7 +118,7 @@ class DocsTests(unittest.TestCase):
         import ast
         unlabelled = []
         for f in self.ROOT.rglob("*.py"):
-            if {"workspace", "logs", ".git"} & set(f.parts) or f.name == "__init__.py" and f.parent.name == "tests":
+            if {"workspace", "logs", ".git"} & set(f.parts) or (f.name == "__init__.py" and f.parent.name == "tests"):
                 continue
             doc = ast.get_docstring(ast.parse(f.read_text())) or ""
             if not doc.startswith("["):

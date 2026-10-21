@@ -20,15 +20,19 @@ from __future__ import annotations
 import json
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from ..backends import BackendUnavailable, build_backend_from_spec, build_local_backend
 from ..backends.router import RouterBackend
 from ..core.agent import Agent
 from ..core.config import Config
+from ..core.errors import AgentCancelled
+from ..security.guards import validate_workspace
+from ..security.redact import redact
 from ..tools import ToolContext, build_registry
 from ..tools.registry import Approver, AskUser
 from .blackboard import Blackboard
@@ -94,11 +98,14 @@ class CouncilResult:
         lines += ["", f"_tokens: {self.usage} · {self.seconds:.1f}s_"]
         return "\n".join(lines)
 
-    def save(self, directory: Path) -> Path:
+    def save(self, directory: Path | None) -> Path | None:
+        """Write Markdown + JSON transcripts (secrets redacted). None = logging off."""
+        if directory is None:
+            return None
         directory.mkdir(parents=True, exist_ok=True)
         stem = directory / f"council-{time.strftime('%Y%m%d-%H%M%S')}-{self.protocol}"
-        stem.with_suffix(".md").write_text(self.to_markdown())
-        stem.with_suffix(".json").write_text(json.dumps(self.to_dict(), indent=2, default=str))
+        stem.with_suffix(".md").write_text(redact(self.to_markdown()))
+        stem.with_suffix(".json").write_text(redact(json.dumps(self.to_dict(), indent=2, default=str)))
         return stem.with_suffix(".md")
 
 
@@ -123,7 +130,10 @@ class Session:
         self.council.on_event("council", {"event": event_name, **data})
 
     def ask(self, name: str, prompt: str, kind: str, round_no: int) -> str:
-        """One member, one contribution. Errors are recorded, not raised."""
+        """One member, one contribution. Errors are recorded, not raised
+        (except a user Stop, which ends the whole deliberation)."""
+        if self.council._cancelled.is_set():
+            raise AgentCancelled("council stopped by user")
         self.round_no = max(self.round_no, round_no)
         m = self.members[name]
         self.event("member_start", member=name, kind=kind, round=round_no)
@@ -138,7 +148,7 @@ class Session:
         if text and kind in {"opening", "rebuttal", "draft", "revision"}:
             self.council.board.post(name, text[:4000], topic=f"round{round_no}-{kind}")
         self.event("member_done", member=name, kind=kind, round=round_no, seconds=c.seconds,
-                   error=err, preview=text[:200])
+                   error=err, preview=text[:200], content=text[:20000])
         return text
 
     def gather(self, prompts: dict[str, str], kind: str, round_no: int) -> dict[str, str]:
@@ -167,6 +177,7 @@ class Council:
         names = [s.name for s in specs]
         if len(set(names)) != len(names):
             raise ValueError("council member names must be unique")
+        validate_workspace(cfg.workspace)
         self.cfg = cfg
         self.specs = {s.name: s for s in specs}
         self.workers = workers or cfg.council_workers
@@ -181,13 +192,32 @@ class Council:
         # the chair only synthesises, unless they're the only member
         self.participants = [s.name for s in specs if s.name != self.chair] or [self.chair]
         self.members: dict[str, CouncilMember] = {}
+        self.defaults: dict[str, Any] = {}       # protocol/rounds/... from a config file
+        self.personas: dict[str, Any] = {}       # member name -> Persona, when built from personas
+        self._cancelled = threading.Event()
         self._build_members()
 
     # ------------------------------------------------------------ building
     @classmethod
+    def from_personas(cls, persona_ids: list[str], cfg: Config, **kw) -> "Council":
+        """Build a council from persona ids (presets or files in cfg.persona_dir).
+        The first persona with role 'chair' chairs, unless chair= is given."""
+        from ..personas import load_personas
+        available = load_personas(cfg.persona_dir)
+        missing = [p for p in persona_ids if p not in available]
+        if missing:
+            raise ValueError(f"unknown persona(s): {', '.join(missing)}. Available: {', '.join(available)}")
+        council = cls([available[p].to_member_spec() for p in persona_ids], cfg, **kw)
+        council.personas = {p: available[p] for p in persona_ids}
+        return council
+
+    @classmethod
     def from_config(cls, source: str | Path | dict | None, cfg: Config, **kw) -> "Council":
         """Build from a JSON file / dict (see examples/council.example.json),
-        or the default 4-member council when source is None."""
+        or the default 4-member council when source is None.
+
+        The config may list "members" (role-based), "personas" (persona ids),
+        or both - personas join as extra members."""
         if source is None:
             data: dict[str, Any] = {"members": DEFAULT_MEMBERS}
         elif isinstance(source, dict):
@@ -195,13 +225,21 @@ class Council:
         else:
             data = json.loads(Path(source).read_text())
         specs = [MemberSpec.from_dict(m) for m in data.get("members", [])]
+        personas = {}
+        if data.get("personas"):
+            from ..personas import load_personas
+            available = load_personas(cfg.persona_dir)
+            for pid in data["personas"]:
+                if pid not in available:
+                    raise ValueError(f"unknown persona '{pid}'. Available: {', '.join(available)}")
+                personas[pid] = available[pid]
+                specs.append(available[pid].to_member_spec())
         kw.setdefault("chair", data.get("chair"))
         kw.setdefault("workers", data.get("workers"))
         council = cls(specs, cfg, **kw)
+        council.personas = personas
         council.defaults = {k: data[k] for k in ("protocol", "rounds", "tally_mode", "options") if k in data}
         return council
-
-    defaults: dict = {}
 
     def _build_members(self) -> None:
         for name, spec in self.specs.items():
@@ -224,7 +262,8 @@ class Council:
             others = [f"{n} ({self.specs[n].role})" for n in self.specs if n != name]
             agent = Agent(backend, tools, system_prompt=spec.system_prompt(others),
                           max_steps=spec.max_steps or min(self.cfg.max_steps, 12),
-                          log_dir=self.cfg.log_dir, on_event=self._relay(name), name=f"council-{name}")
+                          log_dir=self.cfg.log_dir, on_event=self._relay(name), name=f"council-{name}",
+                          context_chars=self.cfg.context_chars())
             self.members[name] = CouncilMember(spec, agent)
 
     def _relay(self, member: str) -> EventHook:
@@ -234,7 +273,14 @@ class Council:
         return hook
 
     # ------------------------------------------------------------- running
+    def cancel(self) -> None:
+        """Stop the deliberation at the next safe point (thread-safe)."""
+        self._cancelled.set()
+        for m in self.members.values():
+            m.agent.cancel()
+
     def reset(self) -> None:
+        self._cancelled.clear()
         for m in self.members.values():
             m.agent.reset()
         self.board = Blackboard()

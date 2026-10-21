@@ -4,8 +4,14 @@ from __future__ import annotations
 import json
 import unittest
 
-from hybrid_agent.backends import (BackendUnavailable, CannedBackend, LocalBackend, RouterBackend,
-                                   ScriptedBackend, build_backend_from_spec)
+from hybrid_agent.backends import (
+    BackendUnavailable,
+    CannedBackend,
+    LocalBackend,
+    RouterBackend,
+    ScriptedBackend,
+    build_backend_from_spec,
+)
 from hybrid_agent.backends.claude import to_anthropic_messages
 from hybrid_agent.backends.local import parse_prompted_tool_calls
 from hybrid_agent.cli.doctor import model_available

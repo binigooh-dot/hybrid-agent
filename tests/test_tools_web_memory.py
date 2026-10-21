@@ -7,11 +7,12 @@ from __future__ import annotations
 import json
 import unittest
 
+from hybrid_agent.core.messages import ToolCall
 from hybrid_agent.tools.builtin.documents import bm25_rank, chunk_text, tokenize
 from hybrid_agent.tools.builtin.knowledge import parse_feed
 from hybrid_agent.tools.builtin.web import html_to_text
 
-from .helpers import QuietHandler, ToolTestCase, serve
+from .helpers import QuietHandler, ToolTestCase, make_registry, serve
 
 PAGE = ("<html><head><title>t</title><script>evil()</script></head><body><h1>Hello</h1>"
         "<p>World <a href='/next'>Next page</a> <a href='https://other.org/x'>Other</a></p></body></html>")
@@ -36,6 +37,13 @@ class WebToolTests(ToolTestCase, unittest.TestCase):
     def setUp(self):
         super().setUp()
         self.url = serve(self, Site)
+        # The test server runs on this computer, which web tools refuse by default.
+        self.reg = make_registry(self.tmp, allow_private_network=True)
+
+    def test_loopback_blocked_by_default(self):
+        r = make_registry(self.tmp).execute(ToolCall("t", "fetch_url", {"url": self.url + "/"}))
+        self.assertTrue(r.is_error)
+        self.assertIn("private network", r.content)
 
     def test_fetch_and_links(self):
         text = self.ok("fetch_url", url=self.url + "/")

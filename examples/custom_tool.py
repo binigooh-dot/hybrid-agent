@@ -8,10 +8,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from hybrid_agent import Agent  # noqa: E402
-from hybrid_agent.backends import LocalBackend, ScriptedBackend  # noqa: E402
-from hybrid_agent.core.messages import Message, ToolCall  # noqa: E402
-from hybrid_agent.tools import S, ToolContext, build_registry  # noqa: E402
+from hybrid_agent import Agent
+from hybrid_agent.backends import LocalBackend, ScriptedBackend
+from hybrid_agent.core.messages import Message, ToolCall
+from hybrid_agent.tools import S, ToolContext, build_registry
 
 ctx = ToolContext(workspace=Path("workspace"), approver=lambda *a: True)
 tools = build_registry(ctx, "minimal")          # start small, then add your own

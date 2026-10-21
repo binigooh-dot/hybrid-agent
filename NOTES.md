@@ -4,6 +4,109 @@ A log of what was built, the decisions behind it, and how it was checked. Newest
 
 ---
 
+## Session 3: GUI, personas with faces, knowledge suite, full diagnostic, cleanup, upscale
+
+**Request:** a browsable HTML guide ("Agent Builder knowledge suite"); groundwork for a GUI with a council
+of 2–3 persona agents that have faces; a full diagnostic with simulated critical events; a full code-health
+check by any means; then organise, clean up, and upscale.
+
+### 1. Full diagnostic: simulated critical events (fire drills)
+
+Built `hybrid_agent/diagnostics/`: 29 drills in 9 areas, each in a throwaway sandbox. While they run, a
+**process tripwire** refuses destructive subprocesses and a **network tripwire** blocks and records every
+non-loopback connection, so the drills themselves can never cause harm. They ran against the code *before*
+fixing anything:
+
+**Before: 14/29 passed, 5 critical failures. After: 29/29, none.** The full table is in
+`docs/07_SAFETY_AND_DIAGNOSTICS.md`. What the simulations exposed, and the fixes:
+
+| Found | Fix |
+|---|---|
+| A repo's `.git/config` (fsmonitor, external diff) **ran commands** when the agent used git | git runs with every program-launching setting overridden, plus `--no-ext-diff --no-textconv` and a cleaned environment |
+| Web tools could reach **cloud metadata (169.254.169.254)**, your **LAN**, and **follow redirects** there | `security/netguard.py`: resolve-and-check before connecting; every redirect re-checked; two policies (public / local) |
+| **17 of 34** destructive command variants slipped past the blocklist | Rewrote it as a tokenising checker: any recursive delete with an absolute, `~`, `$HOME`, `..` or wildcard target is refused; Windows forms, `find -delete`, recursive chmod… 34/34 with zero false positives on 8 safe commands |
+| `/` or home accepted as the workspace | `validate_workspace` at every entry point |
+| `(a+)+$` **froze the whole process for 345 s**. Even the drill's timer couldn't fire, because the regex engine holds Python's GIL | Risky-shaped regexes run in a child process killed after 5 s; normal ones stay in-process. Useful nested patterns like `[a-z]+(\.[a-z]+)*` still work |
+| A corrupt `memory.json` was **silently wiped** on the next save | Moved aside to `memory.json.corrupt-<time>` |
+| API keys were written to **session logs** in plain text | `security/redact.py` applied to logs, council transcripts and the GUI event feed |
+| A 300 MB file read used 744 MB of RAM; a 200 MB output flood used 600 MB | Streamed reads; output drained into bounded buffers (1 MB kept) |
+| Timeouts left **orphan child processes** | New process session; the whole tree is killed |
+| No zip-bomb limit; big downloads silently truncated | 1 GB / 20,000-entry archive limit; downloads error cleanly with no partial file |
+| A model repeating one call ran it 30 times | Loop guard: the 4th identical call in a row is refused |
+
+Two of my own drills had bugs (one triggered its own trap; one miscounted). Both were fixed and noted, so
+the results are honest. The drills now run inside the test suite.
+
+### 2. Code health "by any means": tools used and results
+
+| Tool | Initial | Final |
+|---|---|---|
+| ruff (broad rule set incl. security) | 113 findings | clean; config committed in `pyproject.toml` |
+| mypy | 23 errors (later 54 with new code) | clean |
+| bandit (medium+) | 13 issues | clean; each deliberate case marked `# Reviewed (Bxxx): reason` |
+| vulture (dead code) | 4 | none |
+| radon (complexity) | 2 functions rated D | none worse than C (`LocalBackend._chat` split into per-provider adapters; `doctor` split into check functions) |
+| vermin (min Python) | flagged `tomllib` | 3.10 (that import is guarded) |
+| coverage | measured | reported by `scripts/health_check.py` |
+| Python 3.11 / 3.12 / 3.13 | | all tests pass |
+| Playwright + Chromium | n/a | GUI driven end to end; no JS errors; no horizontal scroll at phone width |
+
+Real bugs these surfaced (beyond style): the file-map test broke whenever a tool left a stray file (now
+lists git-tracked files only); `council.save()` would crash with logging off; a `RecursionError` from a tool
+name shadowing a guard function (introduced and caught this session); `doc 01` had a duplicated stale table
+from a session-2 edit that matched `---` inside a table; an `xml_query` variable reuse bug flagged by mypy.
+
+### 3. Personas with faces + GUI groundwork (working, not just scaffolding)
+
+- `personas/`: Persona model (JSON), presets **Sage** (chair), **Vex** (skeptic), **Nova** (researcher), and
+  `faces.py`, a procedural SVG face generator (8 hair styles, 3 face shapes, glasses, beard, earrings,
+  freckles, blush) with **7 expressions**. All inputs are validated, so it's safe to inline.
+- Council integration: `Council.from_personas`, `--personas sage,vex,nova`, `"personas": [...]` in configs.
+- `gui/`: **Agent Studio**, a stdlib HTTP server and a vanilla-JS single-page app, with no CDN, so it works offline.
+  Council stage with live expressions (thinking → speaking → happy/concerned by vote), chat as a persona,
+  persona editor with live face preview, tool browser, safety centre, and Allow/Deny approvals (silence = deny),
+  Stop button (cooperative cancel + rollback). Security: 127.0.0.1 only, per-launch token, Host/Origin checks,
+  strict CSP, text-only model output, 1 MB bodies, whitelisted static files.
+- Avatar roadmap in `docs/06`: portraits via `"image"`, per-expression images, TTS voices, lip-sync, streaming.
+
+### 4. Agent Builder Knowledge Suite
+
+`docs/agent_builder_suite.html`: one self-contained file (open it from disk), generated from the code by
+`scripts/gen_knowledge_suite.py`, also served live at `/guide` in the GUI. Sections: overview diagrams, quick
+start, **tool explorer**, **profile builder** (context-cost gauge, generated profile string), **council
+designer** (config JSON + command + cost estimate), protocols and roles, persona gallery with expressions,
+safety centre (layers + drills + latest results), setup and models, glossary with analogies.
+
+### 5. Upscales
+
+- **Context trimming** for local models: old tool outputs are shortened when the history outgrows ~60% of
+  the context; recent ones stay whole. Never applied to Claude (its API needs an unedited history).
+- **Config validation** with clear startup errors; `Config.context_chars()`.
+- **Cooperative cancel** (`Agent.cancel`, `Council.cancel`) used by the GUI Stop button.
+- `registry.group()` replaces 16 lambda helpers; `reg[name]` / `reg.tools()` replace optional lookups.
+- `doctor` gains workspace-safety and persona checks.
+- `scripts/health_check.py` runs every check with one command.
+
+### 6. Organisation and cleanup
+
+- New `security/` package: every protection in one place (moved out of `core/`).
+- New `diagnostics/`, `personas/`, `gui/` packages; `personas/` folder for your own files; docs 06 and 07.
+- Every file labelled, including HTML/CSS/JS; `docs/FILE_MAP.md` regenerated; build artefacts git-ignored.
+
+### 7. Verification (what was actually run)
+
+| Check | Result |
+|---|---|
+| Full test suite | **all pass** (3.11, 3.12, 3.13) |
+| Safety drills | **29/29** |
+| ruff / mypy / bandit / vulture / vermin / radon | clean / clean / clean / none / 3.10 / ≤ C |
+| GUI in headless Chromium: council vote, persona chat, persona editor, approval Deny, tools, doctor, phone width | **no errors** |
+| GUI via the real CLI (`gui --backend scripted`): index 200, API without token 401, guide 200 | as expected |
+| Live online services (Wikipedia, arXiv, Open-Meteo, DuckDuckGo) | **not verified**: blocked by this build container's network |
+| A real local model or Claude doing a task | **not verified**: no Ollama download allowed here, no API key |
+
+---
+
 ## Session 2: code review, large tool suite, council groundwork, reorganisation
 
 **Request:** check the code, add a large suite of tools, lay the groundwork for a council of agents,

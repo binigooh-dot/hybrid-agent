@@ -22,9 +22,10 @@ import inspect
 import json
 import threading
 import traceback
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from ..core.errors import ToolError
 from ..core.messages import ToolCall
@@ -54,6 +55,7 @@ class ToolContext:
     max_output: int = 20000
     shell_timeout: int = 60
     searxng_url: str | None = None
+    allow_private_network: bool = False                  # web tools may reach LAN/loopback (see core/netguard.py)
     agent_name: str = "agent"                             # who is calling (council members differ)
     state: dict[str, Any] = field(default_factory=dict)   # per-agent scratch (plan, ...)
     local_backend: Any = None                             # for delegate_to_local
@@ -96,12 +98,12 @@ def S(**fields: str | dict) -> dict[str, Any]:
     """
     props: dict[str, Any] = {}
     required: list[str] = []
-    for name, spec in fields.items():
-        if isinstance(spec, dict):
-            spec = dict(spec)
+    for name, given in fields.items():
+        if isinstance(given, dict):
+            spec = dict(given)
             optional = spec.pop("optional", False)
         else:
-            typ, _, desc = spec.partition("|")
+            typ, _, desc = given.partition("|")
             optional = typ.endswith("?")
             spec = {"type": typ.rstrip("?")}
             if desc:
@@ -174,6 +176,17 @@ class ToolRegistry:
             return fn
         return wrap
 
+    def group(self, category: str, **defaults):
+        """Decorator factory for a module's tools, so each @tool needn't repeat its labels:
+
+            t = registry.group("web", risk="network")
+            @t("fetch_url", "...", S(url="string"))
+            def fetch_url(ctx, url): ...
+        """
+        def decorator(name: str, description: str, parameters: dict[str, Any], **kw):
+            return self.tool(name, description, parameters, category=category, **{**defaults, **kw})
+        return decorator
+
     def unregister(self, name: str) -> None:
         self._tools.pop(name, None)
 
@@ -183,6 +196,13 @@ class ToolRegistry:
 
     def get(self, name: str) -> Tool | None:
         return self._tools.get(name)
+
+    def __getitem__(self, name: str) -> Tool:
+        return self._tools[name]
+
+    def tools(self) -> list[Tool]:
+        """All tools, sorted by name."""
+        return [self._tools[n] for n in self.names()]
 
     def __len__(self) -> int:
         return len(self._tools)
@@ -235,7 +255,7 @@ class ToolRegistry:
             out = tool.func(self.ctx, **call.arguments)
         except ToolError as e:
             return ToolResult(str(e), is_error=True)
-        except Exception as e:  # never let a tool crash the agent
+        except Exception as e:  # noqa: BLE001 - deliberate boundary: report the failure, never crash
             tb = traceback.format_exc(limit=3)
             return ToolResult(f"{type(e).__name__}: {e}\n{tb}", is_error=True)
         text = out if isinstance(out, str) else json.dumps(out, indent=2, default=str)

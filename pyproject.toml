@@ -13,3 +13,33 @@ hybrid-agent = "hybrid_agent.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["hybrid_agent*"]
+
+# ---------------------------------------------------------------- code health
+# `ruff check .` and `mypy hybrid_agent` use these settings; see scripts/health_check.py
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+extend-exclude = ["workspace", "logs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "S", "PL", "RUF", "BLE", "PIE", "RET", "UP", "I"]
+ignore = [
+  "E501",                                      # long lines: readability over a hard limit
+  "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR0917", "PLR2004",   # size/complexity: tracked with radon instead
+  "PLC0415",                                   # local imports keep optional deps (anthropic, playwright) lazy
+  "S310",                                      # URL schemes are checked by core/netguard.py before every open
+  "S603", "S607", "S404",                      # subprocess use is deliberate and reviewed (shell.py, code.py)
+  "RUF001", "RUF002", "RUF003",                # typographic characters in user-facing text are intentional
+  "UP037", "PLW0603", "RET504", "RUF005",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S105", "S108", "PLW2901", "RUF012", "RET503", "RUF059", "BLE001"]
+"scripts/*" = ["E402"]
+"examples/*" = ["E402"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+check_untyped_defs = true
+exclude = ["workspace/", "logs/"]

@@ -85,6 +85,7 @@ def parse_prompted_tool_calls(text: str) -> tuple[str, list[ToolCall]]:
 
 
 class LocalBackend(Backend):
+    allows_history_trim = True
     def __init__(
         self,
         model: str,
@@ -98,6 +99,8 @@ class LocalBackend(Backend):
             raise ValueError(f"unknown local provider {provider!r}")
         if tool_mode not in {"auto", "native", "prompt"}:
             raise ValueError(f"unknown tool mode {tool_mode!r}")
+        if not base_url.startswith(("http://", "https://")):
+            raise ValueError(f"LOCAL_BASE_URL must start with http:// or https:// (got {base_url!r})")
         self.name = f"local-{provider}"
         self.model = model
         self.base_url = base_url.rstrip("/")
@@ -115,7 +118,8 @@ class LocalBackend(Backend):
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as r:
+            # Reviewed (B310): scheme validated in __init__
+            with urllib.request.urlopen(req, timeout=self.timeout) as r:  # nosec B310
                 return json.loads(r.read().decode())
         except urllib.error.HTTPError as e:
             body = e.read().decode(errors="replace")
@@ -145,57 +149,53 @@ class LocalBackend(Backend):
             raise BackendUnavailable(f"local server error {e.status}: {e.body[:500]}") from None
 
     def _chat(self, system, messages, tools, native: bool) -> LLMResponse:
-        if not native and tools:
-            system = (system + "\n\n" + PROMPT_TOOL_INSTRUCTIONS
-                      + "\n".join(json.dumps(t) for t in tools))
+        use_tools = bool(tools) and native
+        if tools and not native:
+            system = system + "\n\n" + PROMPT_TOOL_INSTRUCTIONS + "\n".join(json.dumps(t) for t in tools)
         wire = self._to_wire(system, messages, native)
-        if self.provider == "ollama":
-            payload: dict[str, Any] = {
-                "model": self.model, "messages": wire, "stream": False,
-                "options": {"num_ctx": self.num_ctx},
-            }
-            if native and tools:
-                payload["tools"] = [_fn_spec(t) for t in tools]
-            data = self._post("/api/chat", payload)
-            msg = data.get("message", {})
-            text = msg.get("content") or ""
-            raw_calls = msg.get("tool_calls") or []
-            finish = data.get("done_reason", "stop")
-            usage = {"input_tokens": data.get("prompt_eval_count", 0),
-                     "output_tokens": data.get("eval_count", 0)}
-        else:
-            payload = {"model": self.model, "messages": wire}
-            if native and tools:
-                payload["tools"] = [_fn_spec(t) for t in tools]
-            data = self._post("/v1/chat/completions", payload)
-            choice = (data.get("choices") or [{}])[0]
-            msg = choice.get("message", {})
-            text = msg.get("content") or ""
-            raw_calls = msg.get("tool_calls") or []
-            finish = choice.get("finish_reason", "stop")
-            u = data.get("usage") or {}
-            usage = {"input_tokens": u.get("prompt_tokens", 0),
-                     "output_tokens": u.get("completion_tokens", 0)}
-
-        calls: list[ToolCall] = []
-        for rc in raw_calls:
-            fn = rc.get("function", {})
-            args = fn.get("arguments", {})
-            if isinstance(args, str):
-                try:
-                    args = json.loads(args or "{}")
-                except json.JSONDecodeError:
-                    args = {"_raw": args}
-            calls.append(ToolCall(id=rc.get("id") or _new_id(), name=fn.get("name", ""), arguments=args))
-
-        if not native and tools:
+        request = self._ollama_request if self.provider == "ollama" else self._openai_request
+        text, raw_calls, finish, usage = request(wire, [_fn_spec(t) for t in tools] if use_tools and tools else None)
+        calls = [self._parse_call(rc) for rc in raw_calls]
+        if tools and not native:
             text, calls = parse_prompted_tool_calls(text)
-
         stop = "tool_use" if calls else ("max_tokens" if finish == "length" else "end_turn")
-        return LLMResponse(
-            message=Message(role="assistant", content=text, tool_calls=calls),
-            stop_reason=stop, provider=self.name, model=self.model, usage=usage,
-        )
+        return LLMResponse(message=Message(role="assistant", content=text, tool_calls=calls),
+                           stop_reason=stop, provider=self.name, model=self.model, usage=usage)
+
+    # One adapter per server dialect. Each returns (text, raw tool calls, finish reason, usage).
+    def _ollama_request(self, wire: list[dict], fn_tools: list[dict] | None):
+        payload: dict[str, Any] = {"model": self.model, "messages": wire, "stream": False,
+                                   "options": {"num_ctx": self.num_ctx}}
+        if fn_tools:
+            payload["tools"] = fn_tools
+        data = self._post("/api/chat", payload)
+        msg = data.get("message", {})
+        usage = {"input_tokens": data.get("prompt_eval_count", 0), "output_tokens": data.get("eval_count", 0)}
+        return msg.get("content") or "", msg.get("tool_calls") or [], data.get("done_reason", "stop"), usage
+
+    def _openai_request(self, wire: list[dict], fn_tools: list[dict] | None):
+        payload: dict[str, Any] = {"model": self.model, "messages": wire}
+        if fn_tools:
+            payload["tools"] = fn_tools
+        data = self._post("/v1/chat/completions", payload)
+        choice = (data.get("choices") or [{}])[0]
+        msg = choice.get("message", {})
+        u = data.get("usage") or {}
+        usage = {"input_tokens": u.get("prompt_tokens", 0), "output_tokens": u.get("completion_tokens", 0)}
+        return msg.get("content") or "", msg.get("tool_calls") or [], choice.get("finish_reason", "stop"), usage
+
+    @staticmethod
+    def _parse_call(rc: dict) -> ToolCall:
+        fn = rc.get("function", {})
+        args = fn.get("arguments", {})
+        if isinstance(args, str):
+            try:
+                args = json.loads(args or "{}")
+            except json.JSONDecodeError:
+                args = {"_raw": args}
+        if not isinstance(args, dict):
+            args = {"_raw": args}
+        return ToolCall(id=rc.get("id") or _new_id(), name=fn.get("name", ""), arguments=args)
 
     # ------------------------------------------------------------ conversion
     def _to_wire(self, system: str, messages: list[Message], native: bool) -> list[dict]:
@@ -221,9 +221,9 @@ class LocalBackend(Backend):
                 if native:
                     entry = {"role": "tool", "content": m.content}
                     if self.provider == "ollama":
-                        entry["tool_name"] = m.name
+                        entry["tool_name"] = m.name or ""
                     else:
-                        entry["tool_call_id"] = m.tool_call_id
+                        entry["tool_call_id"] = m.tool_call_id or ""
                     out.append(entry)
                 else:
                     status = "ERROR" if m.is_error else "OK"

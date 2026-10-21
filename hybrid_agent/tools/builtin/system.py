@@ -31,7 +31,7 @@ def _mem_gb() -> str:
 
 
 def register(reg: ToolRegistry) -> None:
-    t = lambda *a, **k: reg.tool(*a, category=CATEGORY, **k)  # noqa: E731
+    t = reg.group(CATEGORY)
 
     @t("system_info", "Operating system, CPU count, memory, Python version, and the workspace path.", S())
     def system_info(ctx: ToolContext):
@@ -42,7 +42,7 @@ def register(reg: ToolRegistry) -> None:
     @t("disk_usage", "Free and used disk space for the drive holding a workspace path.",
        S(path="string?|Default '.'"))
     def disk_usage(ctx: ToolContext, path: str = "."):
-        from ...core.safety import resolve_in_workspace
+        from ...security.guards import resolve_in_workspace
         u = shutil.disk_usage(resolve_in_workspace(ctx.workspace, path))
         gb = 1024 ** 3
         return f"total {u.total / gb:.1f} GB, used {u.used / gb:.1f} GB, free {u.free / gb:.1f} GB " \

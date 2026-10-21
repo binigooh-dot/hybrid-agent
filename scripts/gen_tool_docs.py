@@ -13,7 +13,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from hybrid_agent.tools import PROFILES, ToolContext, build_full_registry, build_registry  # noqa: E402
+from hybrid_agent.tools import (
+    PROFILES,
+    ToolContext,
+    build_full_registry,
+    build_registry,
+)
 
 HEADER = """\
 # 04 · Tool reference
@@ -78,7 +83,7 @@ model asks for tool ─► schema check ─► approval (✋ tools) ─► safet
 
 ```python
 from hybrid_agent.tools import S, ToolError
-from hybrid_agent.core.safety import resolve_in_workspace
+from hybrid_agent.security.guards import resolve_in_workspace
 
 @registry.tool(
     "word_count",                                        # the name the model calls
@@ -111,7 +116,9 @@ def build() -> str:
     ctx = ToolContext(workspace=Path("."))
     reg = build_full_registry(ctx)
     out = [HEADER.format(n=len(reg), c=len(reg.categories()))]
-    tok = lambda r: round(len(json.dumps(r.specs())) / 4)  # noqa: E731
+
+    def tok(r) -> int:
+        return round(len(json.dumps(r.specs())) / 4)
     out.append(PROFILE_INTRO.format(full_tok=tok(reg)))
     for name in PROFILES:
         r = build_registry(ctx, name)

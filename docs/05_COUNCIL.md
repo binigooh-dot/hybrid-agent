@@ -84,6 +84,18 @@ one member one vote. Invalid or missing votes count as abstentions. A tie is han
 Every member also gets the `board_post` / `board_read` tools.
 Add a role in `hybrid_agent/council/roles.py`, or give one member a custom `persona`.
 
+## Personas: council members with faces
+
+A persona adds a **character** (name, personality, speaking style, greeting) and a **face** to a role.
+Built-ins: **Sage** (chair), **Vex** (skeptic), **Nova** (researcher). Make your own in the GUI or in `./personas/`.
+
+```bash
+python -m hybrid_agent council --personas sage,vex,nova -p "Should I learn Rust or Go first?" --protocol vote --options "Rust,Go"
+python -m hybrid_agent gui      # watch their faces react while they deliberate
+```
+In a config file, use `"personas": ["sage", "vex", "nova"]`, alongside or instead of `"members"`.
+See [06_GUI_AND_PERSONAS.md](06_GUI_AND_PERSONAS.md).
+
 ## Running one
 
 ```bash
@@ -167,7 +179,8 @@ mixing three 7B models needs roughly 3× the RAM of one, or Ollama swaps them in
 Built and tested (`tests/test_council.py`, 15 tests): member specs and config, roles, the blackboard,
 ballots and tallies, all four protocols, parallel workers, failure handling, transcripts, CLI, and a dry-run mode.
 
-Natural next steps:
+Since then: personas with faces, the GUI council stage with live expressions, Stop/cancel, and context
+trimming for local members. Natural next steps:
 - **`ask_council` tool**: let a normal agent convene a council on a hard sub-question (needs a depth guard so members can't recurse).
 - **Streaming progress** of member replies, and a live view of the blackboard.
 - **Adaptive protocols**: the chair decides whether another debate round is worth its cost.

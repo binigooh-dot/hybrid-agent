@@ -15,7 +15,7 @@ CATEGORY = "council"
 
 
 def register(reg: ToolRegistry) -> None:
-    t = lambda *a, **k: reg.tool(*a, category=CATEGORY, **k)  # noqa: E731
+    t = reg.group(CATEGORY)
 
     @t("board_post", "Post a note to the council's shared board so other members can see it "
        "(findings, evidence, open questions, drafts).",

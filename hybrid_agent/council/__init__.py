@@ -14,5 +14,19 @@ from .member import CouncilMember, MemberSpec
 from .protocols import PROTOCOLS, Protocol
 from .roles import ROLES, Role
 
-__all__ = ["Ballot", "Blackboard", "Council", "CouncilError", "CouncilMember", "CouncilResult",
-           "MemberSpec", "PROTOCOLS", "Protocol", "ROLES", "Role", "Tally", "parse_ballot", "tally"]
+__all__ = [
+           "PROTOCOLS",
+           "ROLES",
+           "Ballot",
+           "Blackboard",
+           "Council",
+           "CouncilError",
+           "CouncilMember",
+           "CouncilResult",
+           "MemberSpec",
+           "Protocol",
+           "Role",
+           "Tally",
+           "parse_ballot",
+           "tally",
+]

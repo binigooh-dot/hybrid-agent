@@ -24,7 +24,7 @@ import re
 import time
 from collections import Counter
 
-from ...core.safety import resolve_in_workspace
+from ...security.guards import resolve_in_workspace
 from ..registry import FILE_LOCK, S, ToolContext, ToolError, ToolRegistry
 from .files import is_binary, walk_files
 
@@ -48,7 +48,8 @@ def chunk_text(text: str, size: int = 1200, overlap: int = 200) -> list[tuple[in
         length += len(line) + 1
         if length >= size:
             chunks.append((start, "\n".join(buf)))
-            keep, kept_len = [], 0
+            keep: list[str] = []
+            kept_len = 0
             for ln in reversed(buf):  # carry the tail over as overlap
                 if kept_len + len(ln) > overlap:
                     break
@@ -85,7 +86,7 @@ def _index_path(ctx: ToolContext):
 
 
 def register(reg: ToolRegistry) -> None:
-    t = lambda *a, **k: reg.tool(*a, category=CATEGORY, **k)  # noqa: E731
+    t = reg.group(CATEGORY)
 
     @t("index_documents", "Build (or rebuild) the search index over text files in the workspace "
        "so search_documents can find relevant passages fast.",

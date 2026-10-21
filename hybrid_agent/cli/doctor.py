@@ -17,7 +17,10 @@ OK, WARN, FAIL = "PASS", "WARN", "FAIL"
 
 
 def _get_json(url: str, timeout: float = 3.0):
-    with urllib.request.urlopen(url, timeout=timeout) as r:
+    if not url.startswith(("http://", "https://")):
+        raise ValueError(f"not an http(s) URL: {url}")
+    # Reviewed (B310): scheme checked above
+    with urllib.request.urlopen(url, timeout=timeout) as r:  # nosec B310
         return json.loads(r.read().decode())
 
 
@@ -27,77 +30,99 @@ def model_available(want: str, models: list[str]) -> bool:
     return want in models or (":" not in want and f"{want}:latest" in models)
 
 
-def run_checks(cfg: Config) -> list[tuple[str, str, str, bool]]:
-    """Returns rows of (status, check, detail, mandatory)."""
-    rows: list[tuple[str, str, str, bool]] = []
+Row = tuple[str, str, str, bool]  # (status, check, detail, required)
 
-    # 1. Python
+
+def check_python(cfg: Config) -> list[Row]:
     ok = sys.version_info >= (3, 10)
-    rows.append((OK if ok else FAIL, "Python >= 3.10", sys.version.split()[0], True))
+    return [(OK if ok else FAIL, "Python >= 3.10", sys.version.split()[0], True)]
 
-    # 2. Local model server
-    server_ok, models = False, []
+
+def check_local_model(cfg: Config) -> list[Row]:
+    """Server reachable, then the configured model is pulled."""
+    server = f"Local server ({cfg.local_provider})"
+    model = f"Local model '{cfg.local_model}'"
     try:
         if cfg.local_provider == "ollama":
-            data = _get_json(cfg.local_base_url.rstrip("/") + "/api/tags")
-            models = [m["name"] for m in data.get("models", [])]
+            models = [m["name"] for m in _get_json(cfg.local_base_url.rstrip("/") + "/api/tags").get("models", [])]
         else:
-            data = _get_json(cfg.local_base_url.rstrip("/") + "/v1/models")
-            models = [m["id"] for m in data.get("data", [])]
-        server_ok = True
-        rows.append((OK, f"Local server ({cfg.local_provider})", cfg.local_base_url, True))
-    except Exception as e:
+            models = [m["id"] for m in _get_json(cfg.local_base_url.rstrip("/") + "/v1/models").get("data", [])]
+    except Exception as e:  # noqa: BLE001 - deliberate boundary: report the failure, never crash
         hint = " - install Ollama and run `ollama serve`" if cfg.local_provider == "ollama" else ""
-        rows.append((FAIL, f"Local server ({cfg.local_provider})", f"{cfg.local_base_url}: {e}{hint}", True))
+        return [(FAIL, server, f"{cfg.local_base_url}: {e}{hint}", True), (FAIL, model, "skipped (server down)", True)]
+    have = model_available(cfg.local_model, models)
+    detail = "available" if have else \
+        f"not found; run `ollama pull {cfg.local_model}` (have: {', '.join(models) or 'none'})"
+    return [(OK, server, cfg.local_base_url, True), (OK if have else FAIL, model, detail, True)]
 
-    # 3. Model pulled
-    if server_ok:
-        have = model_available(cfg.local_model, models)
-        want = cfg.local_model
-        rows.append((OK if have else FAIL, f"Local model '{want}'",
-                     "available" if have else f"not found; run `ollama pull {want}` "
-                     f"(have: {', '.join(models) or 'none'})", True))
-    else:
-        rows.append((FAIL, f"Local model '{cfg.local_model}'", "skipped (server down)", True))
 
-    # 4. Workspace writable
+def check_workspace(cfg: Config) -> list[Row]:
+    from ..security.guards import validate_workspace
     try:
-        cfg.workspace.mkdir(parents=True, exist_ok=True)
-        probe = cfg.workspace / ".write_test"
+        path = validate_workspace(cfg.workspace)
+    except ValueError as e:
+        return [(FAIL, "Workspace location safe", str(e), True)]
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / ".write_test"
         probe.write_text("ok")
         probe.unlink()
-        rows.append((OK, "Workspace writable", str(cfg.workspace.resolve()), True))
     except OSError as e:
-        rows.append((FAIL, "Workspace writable", str(e), True))
+        return [(FAIL, "Workspace writable", str(e), True)]
+    return [(OK, "Workspace safe + writable", str(path), True)]
 
-    # 5. Optional: Ollama CLI on PATH (handy, not required if server runs elsewhere)
+
+def check_optional_tools(cfg: Config) -> list[Row]:
+    rows: list[Row] = []
     if cfg.local_provider == "ollama":
         rows.append((OK if shutil.which("ollama") else WARN, "`ollama` CLI on PATH",
                      shutil.which("ollama") or "not found (fine if the server runs elsewhere)", False))
-
-    # 6. Optional: Claude
     has_sdk = importlib.util.find_spec("anthropic") is not None
     rows.append((OK if has_sdk else WARN, "anthropic SDK (optional)",
                  "installed" if has_sdk else "pip install anthropic  (only for Claude)", False))
-    rows.append((OK if claude_credentials_present() else WARN, "Claude credentials (optional)",
-                 "found" if claude_credentials_present() else "ANTHROPIC_API_KEY not set - local-only mode",
-                 False))
-    # 7. Optional: council config parses and names valid roles/backends
+    has_key = claude_credentials_present()
+    rows.append((OK if has_key else WARN, "Claude credentials (optional)",
+                 "found" if has_key else "ANTHROPIC_API_KEY not set - local-only mode", False))
+    return rows
+
+
+def check_personas_and_council(cfg: Config) -> list[Row]:
+    rows: list[Row] = []
+    try:
+        from ..personas import load_personas
+        personas = load_personas(cfg.persona_dir)
+        rows.append((OK, "Personas load (optional)", f"{len(personas)}: {', '.join(personas)}", False))
+    except ValueError as e:
+        rows.append((WARN, "Personas load (optional)", str(e), False))
     if cfg.council_config:
         try:
             from ..council import MemberSpec
             data = json.loads(cfg.council_config.read_text())
             specs = [MemberSpec.from_dict(m) for m in data.get("members", [])]
-            rows.append((OK, "Council config (optional)", f"{cfg.council_config}: {len(specs)} members", False))
-        except Exception as e:
+            n = len(specs) + len(data.get("personas", []))
+            rows.append((OK, "Council config (optional)", f"{cfg.council_config}: {n} members", False))
+        except Exception as e:  # noqa: BLE001 - deliberate boundary: report the failure, never crash
             rows.append((WARN, "Council config (optional)", f"{cfg.council_config}: {e}", False))
-    if cfg.searxng_url:
-        try:
-            _get_json(cfg.searxng_url.rstrip("/") + "/search?q=test&format=json")
-            rows.append((OK, "SearXNG (optional)", cfg.searxng_url, False))
-        except Exception as e:
-            rows.append((WARN, "SearXNG (optional)", str(e), False))
     return rows
+
+
+def check_search(cfg: Config) -> list[Row]:
+    if not cfg.searxng_url:
+        return []
+    try:
+        _get_json(cfg.searxng_url.rstrip("/") + "/search?q=test&format=json")
+        return [(OK, "SearXNG (optional)", cfg.searxng_url, False)]
+    except Exception as e:  # noqa: BLE001 - deliberate boundary: report the failure, never crash
+        return [(WARN, "SearXNG (optional)", str(e), False)]
+
+
+CHECKS = [check_python, check_local_model, check_workspace, check_optional_tools,
+          check_personas_and_council, check_search]
+
+
+def run_checks(cfg: Config) -> list[Row]:
+    """Every check, in order. Each returns rows of (status, check, detail, required)."""
+    return [row for check in CHECKS for row in check(cfg)]
 
 
 def main(cfg: Config) -> int:

@@ -4,3 +4,9 @@ logs/
 __pycache__/
 *.pyc
 .venv/
+# tooling artefacts
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+*.part

@@ -8,10 +8,16 @@ from __future__ import annotations
 import datetime as dt
 import difflib
 import fnmatch
+import itertools
 import os
 import shutil
 
-from ...core.safety import resolve_in_workspace
+from ...security.guards import (
+    compile_regex,
+    read_text_limited,
+    resolve_in_workspace,
+    run_regex_isolated,
+)
 from ..registry import S, ToolContext, ToolError, ToolRegistry
 
 CATEGORY = "files"
@@ -44,7 +50,7 @@ def _human(n: float) -> str:
 
 
 def register(reg: ToolRegistry) -> None:
-    t = lambda *a, **k: reg.tool(*a, category=CATEGORY, **k)  # noqa: E731
+    t = reg.group(CATEGORY)
 
     @t("read_file", "Read a text file from the workspace. Returns numbered lines. "
        "Use offset/limit for large files.",
@@ -57,12 +63,17 @@ def register(reg: ToolRegistry) -> None:
             raise ToolError(f"No such file: {path}")
         if is_binary(p):
             raise ToolError(f"{path} is a binary file ({_human(p.stat().st_size)}); use file_info or hash_file.")
-        lines = p.read_text(errors="replace").splitlines()
         start = max(offset, 1) - 1
-        chunk = lines[start:start + limit]
-        body = "\n".join(f"{i:>5}  {line}" for i, line in enumerate(chunk, start + 1))
-        more = len(lines) - (start + len(chunk))
-        return (body or "(empty file)") + (f"\n... ({more} more lines)" if more > 0 else "")
+        limit = max(1, min(limit, 5000))
+        with p.open(errors="replace") as f:  # streamed: never loads the whole file
+            chunk = [line.rstrip("\n") for line in itertools.islice(f, start, start + limit)]
+            more = sum(1 for _ in f) if p.stat().st_size < 50_000_000 else None
+        body = "\n".join(f"{i:>5}  {line[:2000]}" for i, line in enumerate(chunk, start + 1))
+        if more is None:
+            tail = "\n... (more lines follow; large file)"
+        else:
+            tail = f"\n... ({more} more lines)" if more > 0 else ""
+        return (body or "(empty file)") + tail
 
     @t("write_file", "Create or overwrite a text file in the workspace. Creates parent folders.",
        S(path="string", content="string"), risk="write")
@@ -91,7 +102,9 @@ def register(reg: ToolRegistry) -> None:
         p = resolve_in_workspace(ctx.workspace, path)
         if not p.is_file():
             raise ToolError(f"No such file: {path}")
-        text = p.read_text()
+        if not old_text:
+            raise ToolError("old_text must not be empty.")
+        text = read_text_limited(p)
         n = text.count(old_text)
         if n == 0:
             raise ToolError("old_text not found. Re-read the file and copy the text exactly.")
@@ -151,11 +164,14 @@ def register(reg: ToolRegistry) -> None:
          ignore_case="boolean?"))
     def search_text(ctx: ToolContext, regex: str, glob: str = "*", ignore_case: bool = False):
         import re
-        try:
-            rx = re.compile(regex, re.IGNORECASE if ignore_case else 0)
-        except re.error as e:
-            raise ToolError(f"Bad regex: {e}")
+        flags = re.IGNORECASE if ignore_case else 0
+        rx, risky = compile_regex(regex, flags)
         root = ctx.workspace.resolve()
+        if risky:  # run in a killable child process (ReDoS protection)
+            files = [[os.path.relpath(f, root), f] for f in walk_files(root)
+                     if fnmatch.fnmatch(os.path.basename(f), glob) and not is_binary(f)]
+            hits = run_regex_isolated("grep", {"pattern": regex, "flags": flags, "files": files, "limit": 200})
+            return "\n".join(hits) or "No matches."
         out = []
         for full in walk_files(root):
             if not fnmatch.fnmatch(os.path.basename(full), glob) or is_binary(full):
@@ -177,7 +193,7 @@ def register(reg: ToolRegistry) -> None:
         if not p.exists():
             raise ToolError(f"No such path: {path}")
         st = p.stat()
-        info = {"path": path, "type": "directory" if p.is_dir() else "file",
+        info: dict[str, object] = {"path": path, "type": "directory" if p.is_dir() else "file",
                 "size": _human(st.st_size),
                 "modified": dt.datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds")}
         if p.is_file():
@@ -239,7 +255,7 @@ def register(reg: ToolRegistry) -> None:
         for p, n in ((a, path_a), (b, path_b)):
             if not p.is_file():
                 raise ToolError(f"No such file: {n}")
-        d = difflib.unified_diff(a.read_text(errors="replace").splitlines(),
-                                 b.read_text(errors="replace").splitlines(),
+        d = difflib.unified_diff(read_text_limited(a, 5_000_000).splitlines(),
+                                 read_text_limited(b, 5_000_000).splitlines(),
                                  path_a, path_b, lineterm="", n=context)
         return "\n".join(d) or "Files are identical."

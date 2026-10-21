@@ -9,6 +9,8 @@
     python -m hybrid_agent tools                    # list tools by category
     python -m hybrid_agent council -p "question" --protocol debate --rounds 2
     python -m hybrid_agent council --council-config examples/council.example.json -p "..."
+    python -m hybrid_agent diagnose                 # safety drills + integrity checks
+    python -m hybrid_agent gui                      # local web GUI (127.0.0.1 only)
 """
 from __future__ import annotations
 
@@ -23,6 +25,7 @@ from ..backends import BackendUnavailable, build_backend, build_local_backend
 from ..backends.router import RouterBackend
 from ..core.agent import Agent
 from ..core.config import Config
+from ..security.guards import validate_workspace
 from ..tools import PROFILES, ToolContext, build_full_registry, build_registry
 from . import doctor
 
@@ -95,7 +98,7 @@ def build_agent(cfg: Config, verbose: bool = True) -> Agent:
     cfg.workspace.mkdir(parents=True, exist_ok=True)
     tools = build_registry(ctx, resolve_profile(cfg, using_claude), include_delegate=using_claude)
     return Agent(backend, tools, max_steps=cfg.max_steps, log_dir=cfg.log_dir,
-                 on_event=print_event if verbose else None)
+                 on_event=print_event if verbose else None, context_chars=cfg.context_chars())
 
 
 def list_tools(cfg: Config) -> None:
@@ -106,7 +109,7 @@ def list_tools(cfg: Config) -> None:
     for cat, names in reg.categories().items():
         print(f"{BOLD}{cat}{RESET}")
         for n in names:
-            t = reg.get(n)
+            t = reg[n]
             star = "*" if t.requires_approval else ""
             print(f"  {n}{star}{DIM}{marks[t.risk]}{RESET}  {t.description.split('. ')[0][:90]}")
         print()
@@ -162,9 +165,12 @@ def run_council(cfg: Config, args) -> int:
     if not question:
         print(f"{RED}Give a question with -p{RESET}", file=sys.stderr)
         return 2
-    council = Council.from_config(cfg.council_config, cfg,
-                                  on_event=None if args.quiet else print_event,
-                                  approver=make_approver(cfg.auto_approve), ask_user=ask_user)
+    kw = dict(on_event=None if args.quiet else print_event,
+              approver=make_approver(cfg.auto_approve), ask_user=ask_user)
+    if args.personas:
+        council = Council.from_personas([p.strip() for p in args.personas.split(",") if p.strip()], cfg, **kw)
+    else:
+        council = Council.from_config(cfg.council_config, cfg, **kw)
     print(f"{BOLD}Council{RESET}\n{council.describe()}\n")
     options = [o.strip() for o in args.options.split(",")] if args.options else None
     try:
@@ -177,14 +183,15 @@ def run_council(cfg: Config, args) -> int:
     if result.tally:
         print(f"{YELLOW}Vote: {result.tally['summary']}{RESET}\n")
     print(result.final_answer)
-    print(f"\n{DIM}Transcript: {path}  ·  tokens {result.usage}  ·  {result.seconds:.1f}s{RESET}")
+    print(f"\n{DIM}Transcript: {path or '(logging off)'}  ·  tokens {result.usage}  ·  {result.seconds:.1f}s{RESET}")
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="hybrid_agent", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", nargs="?", choices=["chat", "doctor", "tools", "council"], default="chat")
+    ap.add_argument("command", nargs="?", choices=["chat", "doctor", "tools", "council", "diagnose", "gui"],
+                    default="chat")
     ap.add_argument("-p", "--prompt", help="run a single prompt (or council question) and exit")
     ap.add_argument("--backend", choices=["auto", "claude", "local", "scripted"])
     ap.add_argument("--model", help="local model name (e.g. qwen2.5:7b)")
@@ -193,12 +200,17 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("-y", "--yes", action="store_true", help="auto-approve risky tools")
     ap.add_argument("-q", "--quiet", action="store_true", help="hide tool activity")
     ap.add_argument("--debug", action="store_true")
+    ap.add_argument("--json", action="store_true", help="diagnose: JSON output")
+    ap.add_argument("--only", help="diagnose: run one drill category or key prefix, e.g. network")
+    ap.add_argument("--port", type=int, default=8765, help="gui: port (binds 127.0.0.1 only)")
+    ap.add_argument("--no-browser", action="store_true", help="gui: don't open a browser tab")
     council = ap.add_argument_group("council")
     council.add_argument("--protocol", choices=["roundtable", "debate", "vote", "critique"])
     council.add_argument("--rounds", type=int)
     council.add_argument("--options", help="comma-separated options to vote on")
     council.add_argument("--council-config", type=Path, help="JSON file describing the members")
     council.add_argument("--workers", type=int, help="members answering in parallel")
+    council.add_argument("--personas", help="comma-separated persona ids, e.g. sage,vex,nova")
     args = ap.parse_args(argv)
 
     logging.basicConfig(level=logging.DEBUG if args.debug else logging.WARNING,
@@ -211,16 +223,32 @@ def main(argv: list[str] | None = None) -> int:
             setattr(cfg, attr, val)
     if args.yes:
         cfg.auto_approve = True
+    try:
+        cfg.validate()
+    except ValueError as e:
+        print(f"{RED}Configuration error: {e}{RESET}", file=sys.stderr)
+        return 2
 
     if args.command == "doctor":
         return doctor.main(cfg)
     if args.command == "tools":
         list_tools(cfg)
         return 0
+    if args.command == "diagnose":
+        from ..diagnostics.runner import main as diagnose
+        return diagnose(as_json=args.json, only=args.only, save_dir=cfg.log_dir)
+    try:
+        cfg.workspace = validate_workspace(cfg.workspace)
+    except ValueError as e:
+        print(f"{RED}{e}{RESET}", file=sys.stderr)
+        return 2
     cfg.workspace.mkdir(parents=True, exist_ok=True)
     try:
         if args.command == "council":
             return run_council(cfg, args)
+        if args.command == "gui":
+            from ..gui.server import serve
+            return serve(cfg, port=args.port, open_browser=not args.no_browser)
         agent = build_agent(cfg, verbose=not args.quiet)
     except (BackendUnavailable, ValueError) as e:
         print(f"{RED}{e}{RESET}", file=sys.stderr)

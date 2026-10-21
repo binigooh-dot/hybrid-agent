@@ -11,7 +11,7 @@ from hybrid_agent.core.agent import TRUNCATED_CALL, Agent
 from hybrid_agent.core.config import load_dotenv
 from hybrid_agent.core.errors import ToolError
 from hybrid_agent.core.messages import LLMResponse, Message, ToolCall
-from hybrid_agent.core.safety import check_shell_command, resolve_in_workspace
+from hybrid_agent.security.guards import check_shell_command, resolve_in_workspace
 
 from .helpers import make_registry
 
@@ -70,7 +70,42 @@ class AgentLoopTests(unittest.TestCase):
         self.assertNotEqual(a._log_path, b._log_path)
 
 
+class ContextTrimTests(unittest.TestCase):
+    def _agent(self, backend):
+        return Agent(backend, make_registry(), context_chars=5000)
+
+    def test_old_tool_output_is_shortened_for_local_models(self):
+        tmp = tempfile.mkdtemp()
+        (Path(tmp) / "big.txt").write_text("x" * 3000 + "\n")
+        calls = [Message(role="assistant", tool_calls=[ToolCall(str(i), "read_file", {"path": "big.txt", "limit": 1})])
+                 for i in range(8)]
+        reg = make_registry(tmp)
+        agent = Agent(ScriptedBackend([*calls, Message(role="assistant", content="done")]), reg, context_chars=12000)
+        agent.messages.extend(Message(role="tool", content="y" * 3000, tool_call_id=f"o{i}", name="read_file")
+                              for i in range(6))
+        agent.run("go")
+        trimmed = [m for m in agent.messages if m.role == "tool" and m.content.startswith("[older tool output")]
+        recent = [m for m in agent.messages if m.role == "tool"][-4:]
+        self.assertTrue(trimmed, "old tool results should be shortened")
+        self.assertFalse(any(m.content.startswith("[older") for m in recent), "recent results stay whole")
+
+    def test_claude_history_is_never_trimmed(self):
+        class ClaudeLike(ScriptedBackend):
+            allows_history_trim = False
+        agent = Agent(ClaudeLike([Message(role="assistant", content="ok")]), make_registry(), context_chars=100)
+        agent.messages.append(Message(role="tool", content="z" * 5000, tool_call_id="1", name="x"))
+        agent.run("hi")
+        self.assertEqual(agent.messages[0].content, "z" * 5000)
+
+
 class ConfigTests(unittest.TestCase):
+    def test_validate(self):
+        from hybrid_agent.core.config import Config
+        Config().validate()
+        for bad in ({"backend": "gpt"}, {"max_steps": 0}, {"local_base_url": "file:///x"}, {"claude_effort": "huge"}):
+            with self.assertRaises(ValueError, msg=bad):
+                Config(**bad).validate()
+
     def test_dotenv_inline_comments(self):
         f = Path(tempfile.mkdtemp()) / ".env"
         f.write_text('HA_T1=ollama   # comment\nHA_T2="a # b"\n# HA_T3=x\n')

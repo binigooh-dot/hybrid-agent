@@ -1,0 +1,6 @@
+{
+  "_comment": "[EXAMPLE / council config] A council of persona characters with faces (Sage chairs, Vex doubts, Nova researches). Personas live in hybrid_agent/personas/presets/ and your own ./personas folder.",
+  "protocol": "debate",
+  "rounds": 2,
+  "personas": ["sage", "vex", "nova"]
+}

@@ -17,7 +17,12 @@ import string
 import urllib.parse
 import uuid
 
-from ...core.safety import resolve_in_workspace
+from ...security.guards import (
+    compile_regex,
+    read_text_limited,
+    resolve_in_workspace,
+    run_regex_isolated,
+)
 from ..registry import S, ToolContext, ToolError, ToolRegistry
 
 CATEGORY = "text"
@@ -40,14 +45,14 @@ def _text_or_file(ctx: ToolContext, text: str | None, path: str | None) -> str:
         p = resolve_in_workspace(ctx.workspace, path)
         if not p.is_file():
             raise ToolError(f"No such file: {path}")
-        return p.read_text(errors="replace")
+        return read_text_limited(p)
     if text is None:
         raise ToolError("Give either 'text' or 'path'.")
     return text
 
 
 def register(reg: ToolRegistry) -> None:
-    t = lambda *a, **k: reg.tool(*a, category=CATEGORY, **k)  # noqa: E731
+    t = reg.group(CATEGORY)
 
     @t("text_stats", "Count characters, words, sentences, lines; estimate reading time and "
        "list the most frequent words. Give text or a file path.",
@@ -68,14 +73,14 @@ def register(reg: ToolRegistry) -> None:
     def regex_find(ctx: ToolContext, pattern: str, text: str | None = None, path: str | None = None,
                    ignore_case: bool = False):
         s = _text_or_file(ctx, text, path)
-        try:
-            rx = re.compile(pattern, re.I if ignore_case else 0)
-        except re.error as e:
-            raise ToolError(f"Bad regex: {e}")
-        out = []
-        for m in list(rx.finditer(s))[:200]:
-            groups = f"  groups={m.groups()}" if m.groups() else ""
-            out.append(f"[{m.start()}:{m.end()}] {m.group(0)[:200]!r}{groups}")
+        flags = re.I if ignore_case else 0
+        rx, risky = compile_regex(pattern, flags)
+        if risky:  # killable child process (ReDoS protection)
+            found = run_regex_isolated("finditer", {"pattern": pattern, "flags": flags, "text": s, "limit": 200})
+        else:
+            found = [[m.start(), m.end(), m.group(0)[:200], list(m.groups())]
+                     for _, m in zip(range(200), rx.finditer(s), strict=False)]
+        out = [f"[{a}:{b}] {g!r}" + (f"  groups={tuple(gs)}" if gs else "") for a, b, g, gs in found]
         return "\n".join(out) or "No matches."
 
     @t("regex_replace_file", "Regex search-and-replace across one file. Supports \\1 backreferences. "
@@ -86,10 +91,16 @@ def register(reg: ToolRegistry) -> None:
         p = resolve_in_workspace(ctx.workspace, path)
         if not p.is_file():
             raise ToolError(f"No such file: {path}")
+        text = read_text_limited(p)
+        rx, risky = compile_regex(pattern)
         try:
-            new, n = re.subn(pattern, replacement, p.read_text(), count=count)
+            if risky:
+                new, n = run_regex_isolated("subn", {"pattern": pattern, "text": text,
+                                                     "replacement": replacement, "count": count})
+            else:
+                new, n = rx.subn(replacement, text, count=count)
         except re.error as e:
-            raise ToolError(f"Bad regex: {e}")
+            raise ToolError(f"Bad replacement: {e}") from None
         if n:
             p.write_text(new)
         return f"{n} replacement(s) in {path}"
@@ -134,7 +145,7 @@ def register(reg: ToolRegistry) -> None:
             import codecs
             return codecs.encode(text, "rot13")
         except (binascii.Error, ValueError) as e:
-            raise ToolError(f"Can't {direction} as {codec}: {e}")
+            raise ToolError(f"Can't {direction} as {codec}: {e}") from None
 
     algos = {"type": "string", "enum": ["md5", "sha1", "sha256", "sha512"], "optional": True}
 

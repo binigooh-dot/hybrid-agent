@@ -31,5 +31,5 @@ def build_registry(ctx: ToolContext, profile: str = "core", include_delegate: bo
     if not include_delegate:
         reg.unregister("delegate_to_local")
     elif "delegate_to_local" not in reg:
-        reg.register(build_full_registry(ctx).get("delegate_to_local"))
+        reg.register(build_full_registry(ctx)["delegate_to_local"])
     return reg

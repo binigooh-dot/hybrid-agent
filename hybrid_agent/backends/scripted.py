@@ -6,7 +6,7 @@ can verify the agent loop + tools work before installing any model.
 from __future__ import annotations
 
 import re
-from typing import Callable
+from collections.abc import Callable, Sequence
 
 from ..core.messages import LLMResponse, Message, ToolCall
 from .base import Backend
@@ -17,8 +17,9 @@ Step = Message | Callable[[list[Message]], Message]
 class ScriptedBackend(Backend):
     name = "scripted"
     model = "scripted"
+    allows_history_trim = True
 
-    def __init__(self, steps: list[Step]):
+    def __init__(self, steps: Sequence[Step]):
         self.steps = list(steps)
         self.calls: list[list[Message]] = []   # what the agent sent, for assertions
 
@@ -49,6 +50,8 @@ def demo_script() -> ScriptedBackend:
 
 
 class CannedBackend(Backend):
+    allows_history_trim = True
+
     """Deterministic, prompt-aware fake model for council demos and tests.
 
     It writes the kind of reply the council protocols ask for: posts one note

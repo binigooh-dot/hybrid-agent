@@ -68,7 +68,7 @@ def apply_profile(base: ToolRegistry, spec: str, **subset_kw) -> ToolRegistry:
         reg = base.subset(max_risk=p.get("max_risk"), **subset_kw)
     for cat in exclude_cats:
         for n in list(reg.names()):
-            if reg.get(n).category == cat:
+            if reg[n].category == cat:
                 reg.unregister(n)
     for m in mods:
         if m.startswith("+"):

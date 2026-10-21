@@ -13,7 +13,7 @@ CATEGORY = "agent"
 
 
 def register(reg: ToolRegistry) -> None:
-    t = lambda *a, **k: reg.tool(*a, category=CATEGORY, **k)  # noqa: E731
+    t = reg.group(CATEGORY)
 
     @t("update_plan", "Write the full task plan (replaces the old one). Use for multi-step work; "
        "mark each item pending, in_progress or done as you go.",

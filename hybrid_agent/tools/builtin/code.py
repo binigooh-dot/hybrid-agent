@@ -9,14 +9,19 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
 import sys
 
-from ...core.safety import resolve_in_workspace
+from ...security.guards import read_text_limited, resolve_in_workspace
+from ...security.xmlsafe import safe_xml_fromstring
 from ..registry import S, ToolContext, ToolError, ToolRegistry
 from .shell import run_process
 
 CATEGORY = "code"
+# Environment variables that make git run other programs.
+_GIT_ENV_UNSAFE = {"GIT_EXTERNAL_DIFF", "GIT_SSH", "GIT_SSH_COMMAND", "GIT_ASKPASS", "GIT_EDITOR",
+                   "GIT_SEQUENCE_EDITOR", "GIT_PROXY_COMMAND", "GIT_CONFIG_PARAMETERS"}
 
 
 def python_outline(source: str) -> list[str]:
@@ -27,7 +32,7 @@ def python_outline(source: str) -> list[str]:
     def sig(fn) -> str:
         try:
             return f"{fn.name}({ast.unparse(fn.args)})"
-        except Exception:
+        except Exception:  # noqa: BLE001 - deliberate boundary: report the failure, never crash
             return fn.name + "(...)"
 
     def visit(nodes, indent):
@@ -50,7 +55,7 @@ _GENERIC_DEF = re.compile(
 
 
 def register(reg: ToolRegistry) -> None:
-    t = lambda *a, **k: reg.tool(*a, category=CATEGORY, **k)  # noqa: E731
+    t = reg.group(CATEGORY)
 
     @t("code_outline", "List the classes and functions in a source file with line numbers "
        "(precise for Python; best-effort for other languages). Use before reading big files.",
@@ -59,12 +64,12 @@ def register(reg: ToolRegistry) -> None:
         p = resolve_in_workspace(ctx.workspace, path)
         if not p.is_file():
             raise ToolError(f"No such file: {path}")
-        src = p.read_text(errors="replace")
+        src = read_text_limited(p)
         if p.suffix == ".py":
             try:
                 lines = python_outline(src)
             except SyntaxError as e:
-                raise ToolError(f"Can't parse {path}: line {e.lineno}: {e.msg}")
+                raise ToolError(f"Can't parse {path}: line {e.lineno}: {e.msg}") from None
         else:
             lines = [f"L{i} {line.strip()[:120]}" for i, line in enumerate(src.splitlines(), 1)
                      if _GENERIC_DEF.match(line)]
@@ -76,7 +81,7 @@ def register(reg: ToolRegistry) -> None:
         p = resolve_in_workspace(ctx.workspace, path)
         if not p.is_file():
             raise ToolError(f"No such file: {path}")
-        text = p.read_text(errors="replace")
+        text = read_text_limited(p)
         ext = p.suffix.lower()
         try:
             if ext == ".py":
@@ -84,10 +89,12 @@ def register(reg: ToolRegistry) -> None:
             elif ext == ".json":
                 json.loads(text)
             elif ext in {".xml", ".svg"}:
-                import xml.etree.ElementTree as ET
-                ET.fromstring(text)
+                safe_xml_fromstring(text)
             elif ext == ".toml":
-                import tomllib
+                try:
+                    import tomllib  # novermin - guarded: ImportError handled below for Python 3.10
+                except ImportError:  # Python 3.10
+                    raise ToolError("TOML checking needs Python 3.11+.") from None
                 tomllib.loads(text)
             else:
                 raise ToolError(f"No syntax checker for '{ext}' files (supported: .py .json .xml .svg .toml)")
@@ -97,7 +104,7 @@ def register(reg: ToolRegistry) -> None:
             return f"JSON ERROR in {path} line {e.lineno} col {e.colno}: {e.msg}"
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - deliberate boundary: report the failure, never crash
             return f"ERROR in {path}: {e}"
         return f"{path}: OK"
 
@@ -116,7 +123,18 @@ def register(reg: ToolRegistry) -> None:
         return run_process(argv, ctx, timeout=max(ctx.shell_timeout, 300))
 
     def git(ctx, *args):
-        return run_process(["git", *args], ctx)
+        # A repository's own .git/config can name programs for git to run
+        # (core.fsmonitor, diff.external, hooks, pagers, credential helpers...).
+        # Override every such setting so a malicious repo can't execute code.
+        hardened = ["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
+                    "-c", "core.pager=cat", "-c", "core.sshCommand=false", "-c", "credential.helper=",
+                    "-c", "protocol.ext.allow=never", "-c", "protocol.file.allow=user",
+                    "-c", "diff.external=", "-c", "core.editor=false", "--no-pager"]
+        if args and args[0] in {"diff", "log", "show"}:
+            args = (args[0], "--no-ext-diff", "--no-textconv", *args[1:])
+        env = {k: v for k, v in os.environ.items() if k not in _GIT_ENV_UNSAFE}
+        env.update(GIT_TERMINAL_PROMPT="0", GIT_CONFIG_NOSYSTEM="1", GIT_PAGER="cat")
+        return run_process([*hardened, *args], ctx, env=env)
 
     @t("git_status", "Show git status (branch, staged/unstaged/untracked files) of the workspace repo.", S())
     def git_status(ctx: ToolContext):

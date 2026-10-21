@@ -11,8 +11,8 @@ Services used (all free, keyless, rate-limited for fair use):
 from __future__ import annotations
 
 import urllib.parse
-import xml.etree.ElementTree as ET
 
+from ...security.xmlsafe import safe_xml_fromstring
 from ..registry import S, ToolContext, ToolError, ToolRegistry
 from .web import html_to_text, http_get_json, http_get_text
 
@@ -31,9 +31,9 @@ WEATHER_CODES = {
 def parse_feed(xml_text: str, limit: int = 15) -> list[dict]:
     """RSS 2.0 or Atom -> [{title, link, date, summary}]."""
     try:
-        root = ET.fromstring(xml_text)
-    except ET.ParseError as e:
-        raise ToolError(f"Not a valid RSS/Atom feed: {e}")
+        root = safe_xml_fromstring(xml_text)
+    except ToolError as e:
+        raise ToolError(f"Not a valid RSS/Atom feed: {e}") from None
     items = []
     for it in root.iter("item"):  # RSS
         items.append({"title": it.findtext("title", ""), "link": it.findtext("link", ""),
@@ -49,7 +49,7 @@ def parse_feed(xml_text: str, limit: int = 15) -> list[dict]:
 
 
 def register(reg: ToolRegistry) -> None:
-    t = lambda *a, **k: reg.tool(*a, category=CATEGORY, risk="network", **k)  # noqa: E731
+    t = reg.group(CATEGORY, risk="network")
 
     @t("wikipedia_search", "Search Wikipedia article titles. Then use wikipedia_summary or fetch_url.",
        S(query="string", lang="string?|Language code, default 'en'", limit="integer?|Default 8"))
@@ -74,7 +74,7 @@ def register(reg: ToolRegistry) -> None:
         url = "http://export.arxiv.org/api/query?" + urllib.parse.urlencode(
             {"search_query": f"all:{query}", "max_results": max_results, "sortBy": "relevance"})
         _, body = http_get_text(url)
-        root = ET.fromstring(body)
+        root = safe_xml_fromstring(body)
         out = []
         for e in root.iter(f"{ATOM}entry"):
             authors = ", ".join(a.findtext(f"{ATOM}name", "") for a in e.findall(f"{ATOM}author"))

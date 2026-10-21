@@ -1,0 +1,175 @@
+<!doctype html>
+<!-- [GUI / page] Agent Studio single-page app. All behaviour lives in app.js (no inline scripts: strict CSP). -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Studio</title>
+  <link rel="icon" href="/static/favicon.svg">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><img src="/static/favicon.svg" alt="">Agent Studio</div>
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="council" aria-selected="true">Council</button>
+    <button role="tab" data-tab="chat" aria-selected="false">Chat</button>
+    <button role="tab" data-tab="personas" aria-selected="false">Personas</button>
+    <button role="tab" data-tab="tools" aria-selected="false">Tools</button>
+    <button role="tab" data-tab="safety" aria-selected="false">Safety</button>
+  </nav>
+  <div class="spacer"></div>
+  <div id="busy" class="busy hidden"><span class="dot"></span><span id="busy-label">Working…</span>
+    <button id="stop" class="btn small danger">Stop</button></div>
+  <span id="status" class="pill" title="Model backend">connecting…</span>
+  <a id="guide-link" class="link" target="_blank" rel="noopener">Guide ↗</a>
+  <button id="theme" class="btn small" title="Toggle light/dark">◐</button>
+</header>
+
+<main>
+  <!-- ================= COUNCIL ================= -->
+  <section id="tab-council" class="tab active" role="tabpanel">
+    <aside class="panel">
+      <h2>Convene a council</h2>
+      <label for="c-question">Question</label>
+      <textarea id="c-question" rows="4" placeholder="e.g. Should I learn Rust or Go first?"></textarea>
+      <label>Members <span class="muted">(click to toggle)</span></label>
+      <div id="c-personas" class="picker"></div>
+      <label for="c-chair">Chair</label>
+      <select id="c-chair"></select>
+      <label for="c-protocol">Protocol</label>
+      <select id="c-protocol"></select>
+      <div id="c-protocol-desc" class="muted" style="font-size:13px;margin-top:4px"></div>
+      <div class="row2">
+        <div><label for="c-rounds">Rounds</label><input id="c-rounds" type="number" min="1" max="5" value="2"></div>
+        <div><label for="c-options">Vote options</label><input id="c-options" type="text" placeholder="A, B, C"></div>
+      </div>
+      <div class="actions"><button id="c-run" class="btn primary">Start deliberation</button></div>
+      <p id="c-estimate" class="muted" style="font-size:12.5px"></p>
+    </aside>
+    <div style="display:grid;gap:16px;min-width:0">
+      <div id="stage" class="stage"><div class="stage-empty">Pick members and ask a question.<br>Their faces react as they think, speak and vote.</div></div>
+      <div id="c-final" class="panel final hidden"></div>
+      <details class="panel"><summary><b>Timeline</b></summary><ol id="c-log" class="log"></ol></details>
+    </div>
+  </section>
+
+  <!-- ================= CHAT ================= -->
+  <section id="tab-chat" class="tab" role="tabpanel">
+    <div class="panel">
+      <div class="chat-head">
+        <div><label for="chat-persona">Talk to</label><select id="chat-persona"></select></div>
+        <div><label for="chat-profile">Tool profile</label><select id="chat-profile"></select></div>
+        <button id="chat-reset" class="btn">New conversation</button>
+      </div>
+      <div id="chat-log" class="chat-log" aria-live="polite"></div>
+      <form id="chat-form" class="chat-form">
+        <textarea id="chat-input" placeholder="Ask the agent to do something… (Enter to send, Shift+Enter for a new line)"></textarea>
+        <button class="btn primary" type="submit">Send</button>
+      </form>
+    </div>
+  </section>
+
+  <!-- ================= PERSONAS ================= -->
+  <section id="tab-personas" class="tab" role="tabpanel">
+    <div class="panel">
+      <h2>Personas</h2>
+      <p class="muted" style="font-size:13px">Built-in personas can be edited; saving creates your own copy in the persona folder.</p>
+      <div id="p-list" class="plist"></div>
+      <div class="actions"><button id="p-new" class="btn">+ New persona</button></div>
+    </div>
+    <form id="p-form" class="panel">
+      <h2 id="p-heading">Edit persona</h2>
+      <div class="editor">
+        <div>
+          <div class="row2">
+            <div><label for="p-id">Id</label><input id="p-id" type="text" pattern="[a-z0-9][a-z0-9_-]{0,39}" required></div>
+            <div><label for="p-name">Name</label><input id="p-name" type="text" maxlength="40" required></div>
+          </div>
+          <div class="row2">
+            <div><label for="p-role">Role</label><select id="p-role"></select></div>
+            <div><label for="p-title">Title</label><input id="p-title" type="text"></div>
+          </div>
+          <label for="p-personality">Personality</label><textarea id="p-personality" rows="3"></textarea>
+          <label for="p-style">Speaking style</label><input id="p-style" type="text">
+          <label for="p-greeting">Greeting</label><input id="p-greeting" type="text">
+          <div class="row2">
+            <div><label for="p-backend">Model</label><input id="p-backend" type="text" placeholder="default | local:qwen2.5:7b | claude"></div>
+            <div><label for="p-weight">Vote weight</label><input id="p-weight" type="number" min="0.1" max="10" step="0.1"></div>
+          </div>
+          <label for="p-tools">Tool profile <span class="muted">(blank = role default)</span></label><select id="p-tools"></select>
+        </div>
+        <div class="preview">
+          <div id="p-preview" class="face"></div>
+          <div id="p-expr" class="expr"></div>
+          <div class="row2" style="text-align:left">
+            <div><label for="f-skin">Skin</label><input id="f-skin" type="color"></div>
+            <div><label for="f-hair">Hair</label><input id="f-hair" type="color"></div>
+            <div><label for="f-eyes">Eyes</label><input id="f-eyes" type="color"></div>
+            <div><label for="f-accent">Shirt</label><input id="f-accent" type="color"></div>
+            <div><label for="f-background">Backdrop</label><input id="f-background" type="color"></div>
+            <div><label for="f-shape">Face</label><select id="f-shape"><option>oval</option><option>round</option><option>square</option></select></div>
+            <div><label for="f-hair_style">Hair style</label><select id="f-hair_style"><option>short</option><option>long</option><option>bun</option><option>curly</option><option>spiky</option><option>bald</option><option>bob</option><option>mohawk</option></select></div>
+            <div><label for="f-mouth_style">Mouth</label><select id="f-mouth_style"><option>default</option><option>wide</option><option>small</option></select></div>
+          </div>
+          <div class="checks">
+            <label><input id="f-glasses" type="checkbox">glasses</label><label><input id="f-beard" type="checkbox">beard</label>
+            <label><input id="f-earrings" type="checkbox">earrings</label><label><input id="f-freckles" type="checkbox">freckles</label>
+            <label><input id="f-blush" type="checkbox">blush</label>
+          </div>
+          <button id="p-random" type="button" class="btn small" style="margin-top:10px">🎲 Random face</button>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="btn primary" type="submit">Save</button>
+        <button id="p-dup" class="btn" type="button">Duplicate</button>
+        <button id="p-del" class="btn danger" type="button">Delete my copy</button>
+      </div>
+    </form>
+  </section>
+
+  <!-- ================= TOOLS ================= -->
+  <section id="tab-tools" class="tab" role="tabpanel">
+    <div class="panel">
+      <div class="filters">
+        <input id="t-search" type="text" placeholder="Search tools…">
+        <select id="t-risk"><option value="">any risk</option><option>read</option><option>network</option><option>write</option><option>execute</option></select>
+        <select id="t-profile"><option value="">any profile</option></select>
+        <span id="t-count" class="muted"></span>
+      </div>
+      <div id="t-cats" class="chips"></div>
+      <div id="t-grid" class="tgrid"></div>
+    </div>
+  </section>
+
+  <!-- ================= SAFETY ================= -->
+  <section id="tab-safety" class="tab" role="tabpanel">
+    <div class="panel">
+      <h2>Safety centre</h2>
+      <p class="muted" style="font-size:13.5px">Fire drills simulate attacks and failures in throwaway folders and check that every defence holds.
+        Nothing destructive is ever run for real.</p>
+      <div class="actions"><button id="s-run" class="btn primary">Run safety drills</button>
+        <button id="s-doctor" class="btn">Check setup (doctor)</button></div>
+      <div id="s-summary" class="summary"></div>
+      <div class="table-wrap"><table id="s-table"></table></div>
+    </div>
+  </section>
+</main>
+
+<div id="modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="m-title">
+  <div class="box">
+    <h2 id="m-title" style="margin-top:0"></h2>
+    <p id="m-text"></p>
+    <pre id="m-pre"></pre>
+    <textarea id="m-input" class="hidden" rows="3"></textarea>
+    <p id="m-timer" class="muted" style="font-size:12.5px"></p>
+    <div class="actions">
+      <button id="m-yes" class="btn primary">Allow</button>
+      <button id="m-no" class="btn">Deny</button>
+    </div>
+  </div>
+</div>
+<div id="toast" class="toast" role="status"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

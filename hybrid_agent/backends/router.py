@@ -35,6 +35,11 @@ class RouterBackend(Backend):
             self.last_used = self.fallback
             return resp
 
+    @property
+    def allows_history_trim(self) -> bool:  # type: ignore[override]
+        # Only if every model that might see the history allows it (Claude doesn't).
+        return self.primary.allows_history_trim and (self.fallback is None or self.fallback.allows_history_trim)
+
     def describe(self) -> str:
         fb = f" -> fallback {self.fallback.describe()}" if self.fallback else ""
         return f"{self.primary.describe()}{fb}"

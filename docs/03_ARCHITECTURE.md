@@ -5,19 +5,22 @@
 Analogy: a building. Each floor uses only the floors below it.
 
 ```
- ┌────────────────────────────────────────────────────────────────────┐
- │ CLI          cli/main.py · cli/doctor.py                           │  you
- ├────────────────────────────────────────────────────────────────────┤
- │ COUNCIL      council/ - members, roles, protocols, ballots, board  │  many agents
- ├────────────────────────────────────────────────────────────────────┤
- │ CORE         core/agent.py - the think → act → observe loop        │  one agent
- ├───────────────────────────────┬────────────────────────────────────┤
- │ BACKENDS (the brain)          │ TOOLS (the hands)                  │
- │ local · claude · router ·     │ registry · profiles ·              │
- │ scripted/canned               │ builtin/ (15 modules, 78 tools)    │
- ├───────────────────────────────┴────────────────────────────────────┤
- │ CORE basics   messages · config · safety · errors                  │  shared vocabulary
- └────────────────────────────────────────────────────────────────────┘
+ ┌──────────────────────────────────────────────────────────────────────┐
+ │ CLI / GUI     cli/ (main, doctor) · gui/ (server, jobs, guide, static)│  you
+ ├──────────────────────────────────────────────────────────────────────┤
+ │ COUNCIL       council/ (roles, protocols, ballots, board)            │  many agents
+ │   + PERSONAS  personas/ (characters + procedural SVG faces)          │
+ ├──────────────────────────────────────────────────────────────────────┤
+ │ CORE          core/agent.py - the think → act → observe loop         │  one agent
+ ├────────────────────────────────┬─────────────────────────────────────┤
+ │ BACKENDS (the brain)           │ TOOLS (the hands)                   │
+ │ local · claude · router ·      │ registry · profiles ·               │
+ │ scripted/canned                │ builtin/ (15 modules, 78 tools)     │
+ ├────────────────────────────────┴─────────────────────────────────────┤
+ │ SECURITY      security/ (guards, netguard, redact, xmlsafe, regex)    │  the rules every
+ │ CORE basics   core/ (messages, config, errors)                       │  layer obeys
+ └──────────────────────────────────────────────────────────────────────┘
+   DIAGNOSTICS   diagnostics/ (fire drills + integrity checks) test all of the above
 ```
 
 ```mermaid
@@ -38,7 +41,10 @@ flowchart TB
     TR --> T3[web · network · knowledge]
     TR --> T4[(memory · documents)]
     TR --> T5[agent ops · council board] -.-> BB
-    T1 & T2 --> S[core/safety.py<br/>sandbox + blocklist]
+    T1 & T2 & T3 --> S[security/<br/>fence · blocklist · netguard · limits]
+    U --> G[GUI server<br/>gui/server.py] --> CO
+    G --> A
+    P2[personas/<br/>characters + faces] --> CO
     A --> LOG[(logs/*.jsonl)]
 ```
 
@@ -86,6 +92,10 @@ The loop stops when the model replies **without** tool calls, or after `max_step
 | **Tool list sorted by name** | The request prefix is byte-identical each turn, which helps Claude's prompt cache. |
 | **Tools return error text and never raise** | The model sees the error and corrects itself; the agent never crashes from a tool bug. |
 | **`FILE_LOCK` + atomic writes** for memory/index files | Parallel council members can't corrupt shared files. |
+| **All protections in `security/`** | One place to read, audit and test what keeps your computer safe. |
+| **History trimming only for local backends** (`Backend.allows_history_trim`) | Small contexts overflow; Claude's API requires an unedited history, so Claude conversations are never trimmed. |
+| **GUI is stdlib + vanilla JS, no CDN** | Works offline; nothing to install; a strict CSP is possible. |
+| **Faces are generated SVG** | No image assets or image models needed; every value is validated, so it's safe to inline. |
 | **Council members are ordinary `Agent`s** | Everything a single agent can do, a member can do; the council only adds orchestration. |
 
 ## Where the state lives
@@ -97,6 +107,8 @@ The loop stops when the model replies **without** tool calls, or after `max_step
 | Long-term memory | `<workspace>/.agent/memory.json` | Permanent; shared by all agents and members |
 | Document index | `<workspace>/.agent/doc_index.json` | Until rebuilt |
 | Council board | `Council.board` (in RAM) + saved in the transcript | One deliberation |
+| Personas | `hybrid_agent/personas/presets/` (built-in), `./personas/` (yours) | Permanent |
+| Latest drill report | `logs/diagnostics-latest.json` | Until the next `diagnose` |
 | Files the agent creates | `<workspace>/` | Permanent |
 | Transcripts | `logs/*.jsonl`, `logs/council-*.md/.json` | Permanent |
 
@@ -108,6 +120,10 @@ The loop stops when the model replies **without** tool calls, or after `max_step
   `chat(system, messages, tools) -> LLMResponse`. Raise `BackendUnavailable` for "can't serve
   right now". Add it to `build_backend` / `build_backend_from_spec` in `backends/__init__.py`.
 - **New council role or protocol:** `council/roles.py` and `council/protocols.py`; see [05_COUNCIL.md](05_COUNCIL.md).
+- **New persona or face feature:** a JSON file in `./personas/`; new face parts go in `personas/faces.py`
+  (see [06_GUI_AND_PERSONAS.md](06_GUI_AND_PERSONAS.md)).
+- **New safety drill:** a function decorated with `@drill(...)` in `diagnostics/drills.py`; it runs in the
+  test suite automatically (see [07_SAFETY_AND_DIAGNOSTICS.md](07_SAFETY_AND_DIAGNOSTICS.md)).
 - **Hooks / UI:** `Agent(..., on_event=fn)` receives `model`, `thought`, `tool_call`, `tool_result`
   and `message` events. `Council(..., on_event=fn)` also receives `council` events
   (`round_start`, `member_done`, `consensus`…).

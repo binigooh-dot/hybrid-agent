@@ -35,11 +35,10 @@ MAX_POSITION_CHARS = 2500  # per member, when showing positions to others (prote
 
 def format_positions(positions: dict[str, str], roles: dict[str, str], exclude: str | None = None) -> str:
     out = []
-    for name, text in positions.items():
-        if name == exclude or not text:
+    for name, full in positions.items():
+        if name == exclude or not full:
             continue
-        if len(text) > MAX_POSITION_CHARS:
-            text = text[:MAX_POSITION_CHARS] + " ...[shortened]"
+        text = full if len(full) <= MAX_POSITION_CHARS else full[:MAX_POSITION_CHARS] + " ...[shortened]"
         out.append(f"### {name} ({roles.get(name, '?')})\n{text}")
     return "\n\n".join(out) or "(no other positions)"
 

@@ -18,8 +18,23 @@ function and a CATEGORY label. ALL_MODULES is the single list of what ships.
     agent_ops       agent           plan, think, ask_user, delegate_to_local
     council_board   council         shared blackboard for council members
 """
-from . import (agent_ops, archives, code, council_board, data, documents, files, knowledge, math_time,
-               memory, network, shell, system, text, web)
+from . import (
+               agent_ops,
+               archives,
+               code,
+               council_board,
+               data,
+               documents,
+               files,
+               knowledge,
+               math_time,
+               memory,
+               network,
+               shell,
+               system,
+               text,
+               web,
+)
 
 ALL_MODULES = [files, shell, code, data, text, math_time, web, network, knowledge, system,
                archives, memory, documents, agent_ops, council_board]

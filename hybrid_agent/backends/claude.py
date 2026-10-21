@@ -44,7 +44,7 @@ def to_anthropic_messages(messages: list[Message]) -> list[dict[str, Any]]:
                 blocks.append({"type": "tool_use", "id": tc.id, "name": tc.name, "input": tc.arguments})
             out.append({"role": "assistant", "content": blocks or [{"type": "text", "text": "(no content)"}]})
         elif m.role == "tool":
-            block = {"type": "tool_result", "tool_use_id": m.tool_call_id,
+            block: dict[str, Any] = {"type": "tool_result", "tool_use_id": m.tool_call_id,
                      "content": m.content or "(empty)"}
             if m.is_error:
                 block["is_error"] = True
@@ -63,7 +63,7 @@ class ClaudeBackend(Backend):
     def __init__(self, model: str = "claude-opus-5-5", effort: str = "medium",
                  max_tokens: int = 16000, fallbacks: bool = True):
         try:
-            import anthropic  # noqa: F401
+            import anthropic
         except ImportError as e:
             raise BackendUnavailable(
                 "the `anthropic` package is not installed (pip install anthropic)") from e

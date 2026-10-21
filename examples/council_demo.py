@@ -8,8 +8,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from hybrid_agent.core.config import Config  # noqa: E402
-from hybrid_agent.council import Council, MemberSpec  # noqa: E402
+from hybrid_agent.core.config import Config
+from hybrid_agent.council import Council, MemberSpec
 
 backend = "local" if "--local" in sys.argv else "scripted"
 cfg = Config(backend=backend, workspace=Path("workspace"), log_dir=Path("logs"))

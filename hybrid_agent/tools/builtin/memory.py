@@ -26,12 +26,21 @@ def _path(ctx: ToolContext) -> Path:
 
 
 def load(ctx: ToolContext) -> dict:
+    """Read the memory file. A corrupted file is MOVED ASIDE (memory.json.corrupt-<time>)
+    rather than silently replaced, so nothing is lost and it can be repaired by hand."""
     p = _path(ctx)
     if not p.exists():
         return {}
     try:
-        return json.loads(p.read_text())
-    except json.JSONDecodeError:
+        data = json.loads(p.read_text())
+        if not isinstance(data, dict):
+            raise ValueError("top level is not an object")
+        return data
+    except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
+        with FILE_LOCK:
+            if p.exists():
+                backup = p.with_name(f"memory.json.corrupt-{time.strftime('%Y%m%d-%H%M%S')}")
+                p.replace(backup)
         return {}
 
 
@@ -44,7 +53,7 @@ def _save(ctx: ToolContext, data: dict) -> None:
 
 
 def register(reg: ToolRegistry) -> None:
-    t = lambda *a, **k: reg.tool(*a, category=CATEGORY, **k)  # noqa: E731
+    t = reg.group(CATEGORY)
 
     @t("remember", "Save a fact to long-term memory under a short key. Overwrites the key if it exists.",
        S(key="string", value="string", tags={"type": "array", "items": {"type": "string"}, "optional": True}),
@@ -65,10 +74,12 @@ def register(reg: ToolRegistry) -> None:
         words = query.lower().split()
         hits = []
         for k, v in data.items():
-            hay = f"{k} {v['value']} {' '.join(v.get('tags', []))}".lower()
+            if not isinstance(v, dict):
+                continue
+            hay = f"{k} {v.get('value', '')} {' '.join(v.get('tags', []))}".lower()
             if all(w in hay for w in words):
-                hits.append(f"- {k}: {v['value']}  (tags: {', '.join(v.get('tags', [])) or '-'}; "
-                            f"{v.get('by', '?')}, {v['updated']})")
+                hits.append(f"- {k}: {v.get('value', '')}  (tags: {', '.join(v.get('tags', [])) or '-'}; "
+                            f"{v.get('by', '?')}, {v.get('updated', '?')})")
         return "\n".join(hits) or "Nothing found in memory."
 
     @t("forget", "Delete a key from long-term memory.", S(key="string"), risk="write")
