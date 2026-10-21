@@ -52,7 +52,7 @@ def protected_paths(extra: list[Path] | None = None) -> list[Path]:
     home = Path.home()
     paths = [Path(p) for p in SYSTEM if os.name == "nt" or not p.startswith("C:")]
     paths += [home / p for p in USER]
-    return [p.resolve() if p.exists() else p for p in paths] + agent_paths(extra)
+    return [p.resolve() for p in paths] + agent_paths(extra)   # resolve(strict=False): works for missing paths too
 
 
 def overlaps(path: Path, protected: Path) -> bool:
@@ -84,8 +84,9 @@ def protected_targets(command: str, workspace: Path | None = None, extra: list[P
         expanded = tok.replace("${HOME}", home).replace("$HOME", home)
         if expanded.startswith("~"):
             expanded = home + expanded[1:]
-        p = Path(expanded) if os.path.isabs(expanded) else ((workspace or Path.cwd()) / expanded)
-        if expanded in {"/dev/null", "/dev/stdout", "/dev/stderr"} or str(p).startswith("/tmp/"):  # noqa: S108  # nosec B108 - only skips scanning
+        rooted = os.path.isabs(expanded) or expanded.startswith(("/", "\\"))   # Windows: "/etc" is rooted, not relative
+        p = Path(expanded) if rooted else ((workspace or Path.cwd()) / expanded)
+        if expanded in {"/dev/null", "/dev/stdout", "/dev/stderr"} or expanded.startswith("/tmp/"):  # noqa: S108  # nosec B108 - only skips scanning
             continue
         for q in prot:
             try:

@@ -37,8 +37,9 @@ faces** that deliberate together, and **Agent Studio**, a local web GUI to drive
 
 ## Quick start: the desktop app
 
-1. Download `HybridAgent-1.1.0-windows-x64.zip` (or the Linux build), unzip it anywhere and double-click
-   **HybridAgent.exe**. Your browser opens Agent Studio.
+1. Download `HybridAgent-1.1.1-windows-x64.zip` (or the Linux / macOS build) from the
+   [latest release](https://github.com/binigooh-dot/hybrid-agent/releases/latest), unzip it anywhere and
+   double-click **HybridAgent.exe**. Your browser opens Agent Studio. Check the zip against `SHA256SUMS`.
 2. **Control** tab: *Install engine*, then download a model (`qwen2.5:7b`, or `qwen2.5:1.5b` on older PCs),
    then *Run check* to confirm the agents can reach Wikipedia and the web.
 3. Use **Council**, **Chat**, or schedule work in **Tasks**.

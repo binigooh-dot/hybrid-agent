@@ -70,7 +70,7 @@ def snapshot(workspace: Path, target: Path, action: str, move: bool = False) -> 
         shutil.copytree(target, dest, symlinks=True)
     else:
         shutil.copy2(target, dest)
-    entry = {"id": bid, "path": str(rel), "action": action, "bytes": size, "time": time.strftime("%Y-%m-%d %H:%M:%S")}
+    entry = {"id": bid, "path": rel.as_posix(), "action": action, "bytes": size, "time": time.strftime("%Y-%m-%d %H:%M:%S")}
     entries = _index(workspace) + [entry]
     total = sum(e["bytes"] for e in entries)
     while total > MAX_BACKUP_BYTES and len(entries) > 1:    # prune oldest

@@ -120,7 +120,7 @@ The loop stops when the model replies **without** tool calls, or after `max_step
   `chat(system, messages, tools) -> LLMResponse`. Raise `BackendUnavailable` for "can't serve
   right now". Add it to `build_backend` / `build_backend_from_spec` in `backends/__init__.py`.
 - **New council role or protocol:** `council/roles.py` and `council/protocols.py`; see [05_COUNCIL.md](05_COUNCIL.md).
-- **New persona or face feature:** a JSON file in `./personas/`; new face parts go in `personas/faces.py`
+- **New persona or face feature:** a JSON file in `./personas/`; new face parts go in `hybrid_agent/personas/faces.py`
   (see [06_GUI_AND_PERSONAS.md](06_GUI_AND_PERSONAS.md)).
 - **New safety drill:** a function decorated with `@drill(...)` in `diagnostics/drills.py`; it runs in the
   test suite automatically (see [07_SAFETY_AND_DIAGNOSTICS.md](07_SAFETY_AND_DIAGNOSTICS.md)).

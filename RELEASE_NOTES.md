@@ -1,4 +1,4 @@
-# Hybrid Agent 1.1.0: the desktop app
+# Hybrid Agent 1.1.1: the desktop app
 
 A tool-using agent and a council of persona agents that run on **your own computer with no API key**, now as a
 **one-folder desktop app**: the GUI, the local model engine, your models, tasks and files live together.
@@ -7,16 +7,27 @@ A tool-using agent and a council of persona agents that run on **your own comput
 
 | File | For |
 |---|---|
-| `HybridAgent-1.1.0-windows-x64.zip` | Windows 10/11 (64-bit): unzip, double-click **HybridAgent.exe** |
-| `HybridAgent-1.1.0-linux-x86_64.zip` | Linux x86-64: unzip, run `./HybridAgent` (install `bubblewrap` for the strict sandbox) |
-| `hybrid_agent-1.1.0-py3-none-any.whl` / `.tar.gz` | Python 3.10+ anywhere: `pip install …whl`, then `hybrid-agent studio` |
+| `HybridAgent-1.1.1-windows-x64.zip` | Windows 10/11 (64-bit): unzip, double-click **HybridAgent.exe** |
+| `HybridAgent-1.1.1-linux-x86_64.zip` | Linux x86-64: unzip, run `./HybridAgent` (install `bubblewrap` for the strict sandbox) |
+| `HybridAgent-1.1.1-macos-arm64.zip` | macOS (Apple silicon), when the macOS build finishes: unzip, run `./HybridAgent` (unsigned: right-click → Open the first time) |
+| `hybrid_agent-1.1.1-py3-none-any.whl` / `.tar.gz` | Python 3.10+ anywhere: `pip install …whl`, then `hybrid-agent studio` |
 
 Then open the **Control** tab: *Install engine* → *Download* a model → *Run check* (confirms the agents can
 reach Wikipedia and the web). Check downloads with `sha256sum -c SHA256SUMS`.
 
 Windows may show a SmartScreen warning because the app isn't code-signed ("More info" → "Run anyway").
 
-## New in 1.1.0
+## Fixed in 1.1.1 (found by the first run on real Windows, GitHub Actions)
+
+- Protected system paths written Unix-style (`/etc/passwd`) were not recognised on Windows, so a modifying
+  command naming them wasn't refused there. They are now resolved on every OS.
+- File tools now always report paths with `/` (they returned `src\m.py` on Windows).
+- The generated file map sorted differently on Windows (case-insensitive paths).
+- The build workflow: a slow macOS queue no longer blocks the Windows/Linux downloads, and the release
+  checks that the Windows and Linux builds are present before publishing.
+- Docs: every link and file path they mention is now checked by a test.
+
+## New in 1.1 (the desktop app)
 
 - **Desktop app**: a portable `home/` folder holds settings, workspace, personas, logs, tasks, the model
   engine and models. It reopens the existing window instead of starting twice, and Quit stops everything.

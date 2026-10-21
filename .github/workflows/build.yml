@@ -1,6 +1,10 @@
 # [CI / build] Test on real Windows, macOS and Linux, then build the self-contained app for each.
-# Runs on every push and pull request; a version tag (v1.2.3) also publishes a GitHub Release
-# with HybridAgent-<version>-<os>.zip, the wheel/sdist and SHA256SUMS.
+# Runs on every push and pull request. A version tag (v1.2.3), or publishing a GitHub Release (which
+# creates the tag), also attaches HybridAgent-<version>-<os>.zip, the wheel/sdist and SHA256SUMS
+# to that release.
+#
+# The release waits for Windows + Linux only. macOS runners can queue for a long time, so the macOS job
+# attaches its own zip to the release whenever it finishes and can't hold the other downloads back.
 name: build
 
 on:
@@ -18,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
+        os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -46,12 +50,38 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: HybridAgent-${{ matrix.os }}
-          path: |
-            dist/*.zip
-            dist/SHA256SUMS
+          path: dist/*.zip
+
+  macos:                       # separate job: a long macOS queue never holds back the release
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install pyinstaller fonttools brotli
+      - run: python -m unittest discover -s tests -t . -v
+      - run: python -m hybrid_agent diagnose
+      - run: python scripts/build_exe.py
+      - name: Smoke-test the built app
+        run: |
+          cd dist/HybridAgent
+          ./HybridAgent --hybrid-python -X utf8 -c "import zoneinfo, sqlite3; print('internal python ok')"
+          ./HybridAgent diagnose
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HybridAgent-macos-latest
+          path: dist/*.zip
+      - name: Attach the macOS zip to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') && !cancelled()
     needs: test-and-build
     runs-on: ubuntu-latest
     permissions:
@@ -61,17 +91,23 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install build && python scripts/build_release.py
+      - name: Wheel + sdist
+        run: python -m pip install build && python scripts/build_release.py
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+          pattern: HybridAgent-*-latest
+      - name: Require the Windows and Linux builds
+        run: |
+          ls artifacts/*/
+          ls artifacts/HybridAgent-windows-latest/*.zip artifacts/HybridAgent-ubuntu-latest/*.zip
       - name: Collect files and checksums
         run: |
-          mkdir out && cp artifacts/*/*.zip dist/*.whl dist/*.tar.gz RELEASE_NOTES.md out/
-          cd out && sha256sum *.zip *.whl *.tar.gz > SHA256SUMS
+          mkdir out && cp artifacts/*/*.zip dist/*.whl dist/*.tar.gz out/
+          cd out && sha256sum * > SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
-          body_path: out/RELEASE_NOTES.md
+          body_path: RELEASE_NOTES.md
           files: |
             out/*.zip
             out/*.whl

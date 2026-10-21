@@ -9,7 +9,7 @@
 | `.gitignore` | [REPO] Files git should ignore (secrets, workspace, logs) |
 | `NOTES.md` | [DOCS] Build notes |
 | `README.md` | [DOCS] Hybrid Agent: local agents, a council with faces, and Claude when you want it |
-| `RELEASE_NOTES.md` | [DOCS] Hybrid Agent 1.1.0: the desktop app |
+| `RELEASE_NOTES.md` | [DOCS] Hybrid Agent 1.1.1: the desktop app |
 | `docs/01_OFFLINE_REQUIREMENTS.md` | [DOCS] 01 · What the agent needs to run without an API key |
 | `docs/02_LOCAL_MODEL_SETUP.md` | [DOCS] 02 · Setting up the local model |
 | `docs/03_ARCHITECTURE.md` | [DOCS] 03 · Architecture |
@@ -135,6 +135,7 @@
 | `tests/test_core.py` | [TESTS / core] Agent loop, config, safety rules. |
 | `tests/test_council.py` | [TESTS / council] Ballots, blackboard, member specs, every protocol, failures, parallelism. |
 | `tests/test_diagnostics.py` | [TESTS / diagnostics] Every safety drill must pass, and the drills must be meaningful. |
+| `tests/test_docs.py` | [TESTS / docs] Everything the documentation points to must exist: links, file paths, downloads, settings. |
 | `tests/test_gui.py` | [TESTS / gui] The local web server: security checks, API, approvals, chat and council jobs. |
 | `tests/test_security.py` | [TESTS / security] Hard safety layers: protected paths, sandbox, backups/undo, audit, integrity, safe mode. |
 | `tests/test_tasks.py` | [TESTS / tasks] Task queue + scheduler: schedule maths, persistence, one-at-a-time running, safety. |

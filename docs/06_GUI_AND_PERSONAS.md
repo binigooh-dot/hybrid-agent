@@ -88,7 +88,7 @@ python -m hybrid_agent council --personas sage,vex,nova -p "..."
 
 ## Faces
 
-Faces are **text** (`personas/faces.py`): 7 lines × 16 characters drawn with Unicode box-drawing and block
+Faces are **text** (`hybrid_agent/personas/faces.py`): 7 lines × 16 characters drawn with Unicode box-drawing and block
 characters, so the outlines are solid lines rather than dashes. All seven expressions plus the animation
 frames for one persona come to about 2,500 characters.
 

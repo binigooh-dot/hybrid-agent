@@ -18,4 +18,4 @@ from .core.agent import Agent
 from .core.config import Config
 
 __all__ = ["Agent", "Config"]
-__version__ = "1.1.0"
+__version__ = "1.1.1"

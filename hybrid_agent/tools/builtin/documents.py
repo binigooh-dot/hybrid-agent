@@ -23,6 +23,7 @@ import os
 import re
 import time
 from collections import Counter
+from pathlib import Path
 
 from ...security.guards import resolve_in_workspace
 from ..registry import FILE_LOCK, S, ToolContext, ToolError, ToolRegistry
@@ -117,7 +118,7 @@ def register(reg: ToolRegistry) -> None:
             if os.path.getsize(full) > 5_000_000 or is_binary(full):
                 continue
             files += 1
-            rel = os.path.relpath(full, ws)
+            rel = Path(os.path.relpath(full, ws)).as_posix()
             with open(full, errors="replace", encoding="utf-8") as f:
                 for line, chunk in chunk_text(f.read()):
                     toks = tokenize(chunk)

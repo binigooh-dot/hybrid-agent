@@ -4,6 +4,30 @@ A log of what was built, the decisions behind it, and how it was checked. Newest
 
 ---
 
+## Session 5b: first run on real Windows (GitHub Actions) - v1.1.1
+
+The first GitHub Actions run: **Linux passed everything. Windows failed 4 tests**, real bugs that Linux and
+Wine hadn't shown. macOS sat in GitHub's queue and never started, which blocked the release step, so the
+`v1.1.0` release stayed empty and the README pointed people to downloads that didn't exist.
+
+| Found on real Windows | Fix |
+|---|---|
+| `rm -rf /etc/passwd` and `cp evil /etc/hosts` were not recognised as touching protected paths: `/etc` doesn't exist on Windows, so it was never resolved to a full path (`C:\etc`) and the comparison silently failed | Protected paths are always resolved (missing ones too), and drive-less rooted paths (`/etc/...`) count as absolute on every OS |
+| `find_files` returned `src\m.py` | Tool output always uses `/` (files, search, document index, archives, backup index) |
+| `docs/FILE_MAP.md` order differed: Windows compares paths case-insensitively | Sorted by the `/` path text |
+| The release waited for macOS, which never got a runner | macOS is its own job and attaches its zip whenever it finishes. The release needs Windows + Linux and checks both zips are present |
+
+Also:
+- **New `tests/test_docs.py`:** every markdown link, every repo path in backticks, every link in the guide,
+  the download file names and the workflow's scripts must exist. It found `personas/faces.py`, which really
+  lives at `hybrid_agent/personas/faces.py`; the top-level `personas/` is your own persona files.
+- **README:** links to the latest release for downloads.
+- **Windows dry run:** the whole suite ran on Windows Python 3.12 under Wine before pushing. The only
+  failures were two Wine-only differences (no git in Wine; Wine's symlinks), both of which pass on the real
+  Windows runner.
+
+---
+
 ## Session 5: desktop app (.exe), control panel, task scheduler, going online, crisper faces - v1.1.0
 
 **Request:** a self-hosted .exe suite for the GUI and a control panel, where all files and a local model live
@@ -151,7 +175,7 @@ Problems found and fixed along the way:
 
 ### 2. ASCII faces with animation
 
-`personas/faces.py` was rewritten: 7 lines × 16 columns of text, built from fixed menus (7 hair, 3 head
+`hybrid_agent/personas/faces.py` was rewritten: 7 lines × 16 columns of text, built from fixed menus (7 hair, 3 head
 shapes, 6 eyes, 6 noses, 3 mouths, glasses/beard/earrings/freckles, 8 colours). There are 7 expressions;
 *speaking* and *thinking* have 4 frames each, and idle faces blink. The browser runs one shared 230 ms timer
 for all faces and only swaps text, so the CPU cost is negligible.
@@ -282,7 +306,7 @@ from a session-2 edit that matched `---` inside a table; an `xml_query` variable
   persona editor with live face preview, tool browser, safety centre, and Allow/Deny approvals (silence = deny),
   Stop button (cooperative cancel + rollback). Security: 127.0.0.1 only, per-launch token, Host/Origin checks,
   strict CSP, text-only model output, 1 MB bodies, whitelisted static files.
-- Avatar roadmap in `docs/06`: portraits via `"image"`, per-expression images, TTS voices, lip-sync, streaming.
+- Avatar roadmap in `docs/06_GUI_AND_PERSONAS.md`: portraits via `"image"`, per-expression images, TTS voices, lip-sync, streaming.
 
 ### 4. Agent Builder Knowledge Suite
 

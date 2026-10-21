@@ -56,8 +56,10 @@ def project_files() -> list[Path]:
         files = [ROOT / line for line in out.splitlines() if line]
     except (OSError, subprocess.CalledProcessError):
         files = [f for f in ROOT.rglob("*") if f.is_file()]
-    return sorted({f for f in files if f.is_file() and not SKIP & set(f.relative_to(ROOT).parts)
-                   and f.name != "FILE_MAP.md" and f.suffix not in {".pyc", ".coverage"}})
+    keep = {f for f in files if f.is_file() and not SKIP & set(f.relative_to(ROOT).parts)
+            and f.name not in {"FILE_MAP.md", ".coverage"} and f.suffix != ".pyc"}
+    # sort by the "/" path text, case-sensitively: Windows compares Path objects case-insensitively
+    return sorted(keep, key=lambda f: f.relative_to(ROOT).as_posix())
 
 
 def build() -> str:

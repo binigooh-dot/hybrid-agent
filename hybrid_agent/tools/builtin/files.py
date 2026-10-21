@@ -15,6 +15,7 @@ import fnmatch
 import itertools
 import os
 import shutil
+from pathlib import Path
 
 from ...security import backup
 from ...security.guards import (
@@ -165,7 +166,7 @@ def register(reg: ToolRegistry) -> None:
         root = ctx.workspace.resolve()
         hits = []
         for full in walk_files(root):
-            rel = os.path.relpath(full, root)
+            rel = Path(os.path.relpath(full, root)).as_posix()
             if fnmatch.fnmatch(rel, pattern) or fnmatch.fnmatch(os.path.basename(full), pattern):
                 hits.append(rel)
                 if len(hits) >= 500:
@@ -182,7 +183,7 @@ def register(reg: ToolRegistry) -> None:
         rx, risky = compile_regex(regex, flags)
         root = ctx.workspace.resolve()
         if risky:  # run in a killable child process (ReDoS protection)
-            files = [[os.path.relpath(f, root), f] for f in walk_files(root)
+            files = [[Path(os.path.relpath(f, root)).as_posix(), f] for f in walk_files(root)
                      if fnmatch.fnmatch(os.path.basename(f), glob) and not is_binary(f)]
             hits = run_regex_isolated("grep", {"pattern": regex, "flags": flags, "files": files, "limit": 200})
             return "\n".join(hits) or "No matches."
@@ -194,7 +195,7 @@ def register(reg: ToolRegistry) -> None:
                 with open(full, errors="replace", encoding="utf-8") as fh:
                     for i, line in enumerate(fh, 1):
                         if rx.search(line):
-                            out.append(f"{os.path.relpath(full, root)}:{i}: {line.rstrip()[:300]}")
+                            out.append(f"{Path(os.path.relpath(full, root)).as_posix()}:{i}: {line.rstrip()[:300]}")
                             if len(out) >= 200:
                                 return "\n".join(out) + "\n...(stopped at 200 matches)"
             except OSError:

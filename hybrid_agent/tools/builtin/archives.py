@@ -68,11 +68,11 @@ def register(reg: ToolRegistry) -> None:
         if output.endswith(".zip"):
             with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
                 for f in files:
-                    z.write(f, f.relative_to(root))
+                    z.write(f, f.relative_to(root).as_posix())
         elif _is_tar(output):
             with tarfile.open(out, _tar_mode(output, True)) as tf:  # type: ignore[call-overload]  # mode is computed
                 for f in files:
-                    tf.add(f, str(f.relative_to(root)))
+                    tf.add(f, f.relative_to(root).as_posix())
         else:
             raise ToolError("Output must end in .zip, .tar, .tar.gz, .tgz, .tar.bz2 or .tar.xz")
         return f"Created {output} with {len(files)} files ({out.stat().st_size} B)"

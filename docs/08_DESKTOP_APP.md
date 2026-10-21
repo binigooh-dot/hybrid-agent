@@ -111,7 +111,7 @@ Most reliable search: run your own [SearXNG](https://docs.searxng.org/) and put 
 | Windows | `pip install pyinstaller tzdata` then `python scripts\build_exe.py` | `dist\HybridAgent\HybridAgent.exe` + zip |
 | macOS / Linux | `pip install pyinstaller` then `python3 scripts/build_exe.py` | `dist/HybridAgent/HybridAgent` + zip |
 | Linux, want the Windows .exe | Wine + the Windows Python from nuget.org (see below) | the same `.exe` |
-| A GitHub repo | push a tag `v1.1.0` | `.github/workflows/build.yml` tests on **real** Windows, macOS and Linux, builds all three, and publishes a Release |
+| A GitHub repo | publish a release (tag `v1.1.1`) | `.github/workflows/build.yml` tests on **real** Windows, macOS and Linux, builds all three, and publishes a Release |
 
 Windows build from Linux (how the shipped `.exe` was made):
 
