@@ -1,6 +1,7 @@
 # Developing
 
-Python 3.10+, standard library only (Claude support optionally uses `pip install anthropic`).
+Python 3.10+, standard library only. For Claude: `pip install -r requirements-claude.txt` (the Windows app
+bundles it).
 
 ```
 python -m hybrid_agent studio                     # the full app, from source (home folder: ~/HybridAgent/home)

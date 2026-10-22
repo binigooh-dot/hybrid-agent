@@ -44,8 +44,8 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - name: Install the build tools
-        run: python -m pip install pyinstaller tzdata
+      - name: Install the build tools (+ the Claude SDK, bundled so a key in settings.env just works)
+        run: python -m pip install pyinstaller tzdata anthropic
       - name: Build HybridAgent.exe
         run: python scripts/build_exe.py
       - name: Smoke-test the built app
@@ -53,7 +53,8 @@ jobs:
         run: |
           cd dist/HybridAgent
           test -f "START HERE.txt"
-          ./HybridAgent.exe --hybrid-python -X utf8 -c "import zoneinfo, sqlite3; print('internal python ok')"
+          ./HybridAgent.exe --hybrid-python -X utf8 -c "import zoneinfo, sqlite3, anthropic; print('internal python ok')"
+          ANTHROPIC_API_KEY=sk-ant-ci-dummy ./HybridAgent.exe --hybrid-python -X utf8 -c "from hybrid_agent.backends import build_backend; from hybrid_agent.core.config import Config; d = build_backend(Config.from_env()).describe(); print(d); assert 'claude' in d"
           ./HybridAgent.exe doctor || true       # no model on CI: the model checks are expected to fail
           ./HybridAgent.exe diagnose
       - uses: actions/upload-artifact@v6

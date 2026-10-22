@@ -30,6 +30,14 @@ class DocLinkTests(unittest.TestCase):
                     missing.append(f"{d.relative_to(ROOT).as_posix()} -> {target}")
         self.assertEqual(missing, [])
 
+    def test_code_points_to_docs_that_exist(self):
+        missing = []
+        for f in [*(ROOT / "hybrid_agent").rglob("*.py"), *(ROOT / "scripts").glob("*.py"), *(ROOT / "packaging").glob("*.py")]:
+            for m in re.finditer(r"\bdocs/[\w./-]*\w", f.read_text(encoding="utf-8")):
+                if not (ROOT / m.group(0)).exists():
+                    missing.append(f"{f.relative_to(ROOT).as_posix()} -> {m.group(0)}")
+        self.assertEqual(missing, [])
+
     def test_download_names_match_this_version(self):
         """README / release notes name the files the build actually produces for this version."""
         from hybrid_agent import __version__

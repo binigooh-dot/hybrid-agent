@@ -30,7 +30,7 @@ a = Analysis(
     pathex=[ROOT],
     datas=collect_data_files("hybrid_agent", excludes=["**/__pycache__/*", "MANIFEST.sha256"]) + TZ_DATA,
     hiddenimports=collect_submodules("hybrid_agent") + STDLIB_FOR_SCRIPTS + TZ_IMPORTS,
-    excludes=["tkinter", "test", "lib2to3", "pydoc_data", "anthropic", "playwright", "PIL", "fontTools"],
+    excludes=["tkinter", "test", "lib2to3", "pydoc_data", "playwright", "PIL", "fontTools"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

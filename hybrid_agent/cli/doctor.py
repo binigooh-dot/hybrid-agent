@@ -133,7 +133,7 @@ def main(cfg: Config) -> int:
     failed = [r for r in rows if r[3] and r[0] == FAIL]
     print()
     if failed:
-        print("Not ready for key-free use. Fix the FAIL rows above (see docs/02_LOCAL_MODEL_SETUP.md).")
+        print("Not ready for key-free use. Fix the FAIL rows above (or press Set up now in the app).")
         return 1
     print("Ready: the agent can run with no API key.")
     return 0

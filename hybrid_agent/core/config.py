@@ -67,7 +67,7 @@ class Config:
     log_dir: Path | None = field(default_factory=lambda: Path("logs"))   # None = no logs
     searxng_url: str | None = None       # optional self-hosted search, no key
     allow_private_network: bool = False  # let web tools reach your LAN / this computer
-    # --- Hard safety (see docs/07) ---
+    # --- Hard safety (see docs/SAFETY.md) ---
     sandbox: str = "auto"                # auto | strict | limits | off - isolation for commands
     require_sandbox: bool = False        # refuse to run commands without strict isolation
     safe_mode: bool = False              # read-only agents: no write or execute tools at all
