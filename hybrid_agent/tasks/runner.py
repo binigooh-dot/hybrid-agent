@@ -15,7 +15,6 @@ from __future__ import annotations
 import collections
 import dataclasses
 import logging
-import platform
 import threading
 from collections.abc import Callable
 
@@ -41,32 +40,17 @@ def execute(task: Task, cfg: Config, approver=None, asker=None, on_event=None, c
     approve = _deny if task.permission == "safe" else approver
     if task.kind == "council":
         from ..council import Council
-        council = Council.from_personas(task.personas, run_cfg, on_event=on_event, approver=approve, ask_user=asker)
+        council = Council.from_agents(task.agents, run_cfg, on_event=on_event, approver=approve, ask_user=asker)
         if cancel_hook:
             cancel_hook(council.cancel)
         result = council.deliberate(task.prompt, protocol=task.protocol)
         result.save(cfg.log_dir)
         return result.final_answer
-    from ..backends import build_backend, build_local_backend
-    from ..backends.router import RouterBackend
-    from ..core.agent import DEFAULT_SYSTEM_PROMPT, Agent
-    from ..personas import load_personas
-    from ..tools import ToolContext, build_registry
-    backend = build_backend(run_cfg)
-    claude = isinstance(backend, RouterBackend)
-    ctx = ToolContext.from_config(run_cfg, approver=approve, ask_user=asker,
-                                  local_backend=build_local_backend(run_cfg) if claude else None)
-    tools = build_registry(ctx, task.profile or ("research" if task.permission == "safe" else "core"),
-                           include_delegate=claude, safe_mode=run_cfg.safe_mode)
-    system = DEFAULT_SYSTEM_PROMPT.format(os=platform.system()) + (
-        "\n\nThis is a scheduled task running unattended. Work on your own, then give a complete, "
-        "self-contained answer: it will be saved as the task's result.")
-    if task.persona:
-        p = load_personas(cfg.persona_dir).get(task.persona)
-        if p:
-            system += f"\n\nYou are {p.name}, {p.title}.\n{p.persona_text()}"
-    agent = Agent(backend, tools, system_prompt=system, max_steps=cfg.max_steps, log_dir=cfg.log_dir,
-                  name=f"task-{task.id}", on_event=on_event, context_chars=cfg.context_chars())
+    from ..agents.build import build_agent
+    agent = build_agent(run_cfg, task.agent or None, profile=task.profile or ("research" if task.permission == "safe"
+                        else "core"), approver=approve, asker=asker, on_event=on_event, name=f"task-{task.id}",
+                        extra_prompt="This is a scheduled task running unattended. Work on your own, then give a "
+                                     "complete, self-contained answer: it will be saved as the task's result.")
     if cancel_hook:
         cancel_hook(agent.cancel)
     return agent.run(task.prompt)

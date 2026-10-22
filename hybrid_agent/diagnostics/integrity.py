@@ -4,7 +4,7 @@ Fast checks that need no model and no network:
   * every module compiles
   * every tool's schema matches its function signature, and every tool is labelled
   * every profile references real tools; every council role references a real profile
-  * the persona presets load and every face frame is well-formed ASCII
+  * the built-in agents' face frames are well-formed ASCII
   * the release manifest (if present) matches the installed files
 """
 from __future__ import annotations
@@ -51,17 +51,16 @@ def check_profiles_and_roles() -> tuple[bool, str]:
     return not problems, f"{len(PROFILES)} profiles, {len(ROLES)} roles valid" if not problems else "; ".join(problems)
 
 
-def check_personas() -> tuple[bool, str]:
-    from ..personas import load_presets, render_all
-    from ..personas.faces import in_font
-    presets = load_presets()
-    for p in presets:
-        for ex, frames in render_all(p.face).items():
+def check_agents() -> tuple[bool, str]:
+    from ..agents import builtin_agents, render_all
+    agents = builtin_agents()
+    for a in agents.values():
+        for ex, frames in render_all(a.face).items():
             for frame in frames:
                 rows = frame.split("\n")
-                if len(rows) != 7 or any(len(r) != 16 for r in rows) or not in_font(frame):
-                    return False, f"{p.id}: face '{ex}' is malformed"
-    return True, f"{len(presets)} personas: every expression and animation frame is 7x16, all in the bundled font"
+                if len(rows) != 7 or any(len(r) != 16 for r in rows) or not all(32 <= ord(c) < 127 for c in frame.replace("\n", "")):
+                    return False, f"{a.id}: face '{ex}' is malformed"
+    return True, f"{len(agents)} built-in agents: every face frame is 7x16 plain ASCII"
 
 
 def check_manifest() -> tuple[bool, str]:
@@ -73,4 +72,4 @@ def check_manifest() -> tuple[bool, str]:
 
 
 CHECKS = [("compile", check_compile), ("tools", check_tools), ("profiles+roles", check_profiles_and_roles),
-          ("personas", check_personas), ("manifest", check_manifest)]
+          ("agents", check_agents), ("manifest", check_manifest)]

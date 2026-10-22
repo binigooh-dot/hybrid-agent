@@ -127,7 +127,7 @@ class LocalBackend(Backend):
         except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
             raise BackendUnavailable(
                 f"local model server at {self.base_url} unreachable: {e}. "
-                "Is Ollama running? Try `ollama serve`."
+                "Is the model engine running? Press Set up now in the app (or run `ollama serve`)."
             ) from None
 
     # ------------------------------------------------------------ public API
@@ -144,7 +144,7 @@ class LocalBackend(Backend):
             if e.status == 404 and "model" in e.body.lower():
                 raise BackendUnavailable(
                     f"model {self.model!r} not found on the local server. "
-                    f"Run `ollama pull {self.model}`."
+                    f"Download it with Set up now in the app (or `ollama pull {self.model}`)."
                 ) from None
             raise BackendUnavailable(f"local server error {e.status}: {e.body[:500]}") from None
 

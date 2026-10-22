@@ -16,7 +16,7 @@ class HomeFolderTests(unittest.TestCase):
     def setUp(self):
         self.env = mock.patch.dict(os.environ, {}, clear=False)
         self.env.start()
-        for k in ("HYBRID_AGENT_HOME", "AGENT_WORKSPACE", "AGENT_LOG_DIR", "AGENT_PERSONA_DIR", "OLLAMA_MODELS",
+        for k in ("HYBRID_AGENT_HOME", "AGENT_WORKSPACE", "AGENT_LOG_DIR", "AGENTS_DIR", "OLLAMA_MODELS",
                   "LOCAL_MODEL", "AGENT_CONTACT"):
             os.environ.pop(k, None)
         self.addCleanup(self.env.stop)
@@ -109,7 +109,7 @@ class ControlApiTests(unittest.TestCase):
         from hybrid_agent.core.config import Config
         from hybrid_agent.gui.server import create_server
         tmp = Path(tempfile.mkdtemp())
-        cfg = Config(backend="scripted", workspace=tmp / "ws", log_dir=tmp / "logs", persona_dir=tmp / "p")
+        cfg = Config(backend="scripted", workspace=tmp / "ws", log_dir=tmp / "logs", agents_dir=tmp / "a")
         cfg.workspace.mkdir()
         srv, app = create_server(cfg, port=0, state=tmp)
         threading.Thread(target=srv.serve_forever, daemon=True).start()

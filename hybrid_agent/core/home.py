@@ -3,9 +3,9 @@
     HybridAgent/
     ├─ HybridAgent.exe       the launcher (or `hybrid-agent studio`)
     └─ home/
-       ├─ settings.env       your settings (KEY=VALUE, edited from the Control panel)
+       ├─ settings.env       your settings (KEY=VALUE, edited from Settings in the app)
        ├─ workspace/         the agents' files (+ .agent/ undo history)
-       ├─ personas/ logs/    your characters; transcripts + audit log
+       ├─ agents/ logs/      your agents; transcripts + audit log
        ├─ tasks/             the task queue, schedules and results
        ├─ models/            local model files (Ollama stores them here)
        └─ runtime/           the model engine, installed on demand
@@ -16,7 +16,7 @@ Where the home folder is:
   3. otherwise none - settings come from the environment / ./.env as before
 
 Copy the whole HybridAgent folder to another drive or computer and everything
-(models, tasks, personas, history) comes with it. Analogy: a camper van -
+(models, tasks, agents, history) comes with it. Analogy: a camper van -
 the kitchen, bed and luggage travel together.
 """
 from __future__ import annotations
@@ -27,9 +27,9 @@ from pathlib import Path
 
 from .config import load_dotenv
 
-FOLDERS = ("workspace", "personas", "logs", "tasks", "models", "runtime")
+FOLDERS = ("workspace", "agents", "logs", "tasks", "models", "runtime")
 SETTINGS = "settings.env"
-# settings.env keys the Control panel may change (everything else is edited by hand)
+# settings.env keys the app's Settings tab may change (everything else is edited by hand)
 EDITABLE = ("LOCAL_MODEL", "LOCAL_PROVIDER", "LOCAL_BASE_URL", "AGENT_BACKEND", "AGENT_CONTACT", "SEARXNG_URL",
             "AGENT_SANDBOX", "AGENT_SAFE_MODE", "AGENT_MIN_FREE_MB", "LOCAL_NUM_CTX", "AGENT_AUTO_START_MODEL")
 
@@ -57,15 +57,16 @@ def apply_home(home: Path) -> Path:
         (home / name).mkdir(parents=True, exist_ok=True)
     settings = home / SETTINGS
     if not settings.exists():
+        from ..runtime.ollama import recommend_model
         settings.write_text(
-            "# Hybrid Agent settings - KEY=VALUE, one per line. The Control panel edits these for you.\n"
-            "# All options: see .env.example in the project or docs/01_OFFLINE_REQUIREMENTS.md\n"
-            "LOCAL_MODEL=qwen2.5:7b\n"
+            "# Hybrid Agent settings - KEY=VALUE, one per line. The app's Settings tab edits these for you.\n"
+            "# Every option is listed in .env.example (in the project on GitHub).\n"
+            f"LOCAL_MODEL={recommend_model()}\n"
             "# AGENT_CONTACT=you@example.com   # sent to websites like Wikipedia so they know who to contact\n", encoding="utf-8")
     os.environ["HYBRID_AGENT_HOME"] = str(home)
     load_dotenv(settings)
     defaults = {"AGENT_WORKSPACE": home / "workspace", "AGENT_LOG_DIR": home / "logs",
-                "AGENT_PERSONA_DIR": home / "personas", "OLLAMA_MODELS": home / "models"}
+                "AGENTS_DIR": home / "agents", "OLLAMA_MODELS": home / "models"}
     for key, value in defaults.items():
         os.environ.setdefault(key, str(value))
     return home

@@ -81,22 +81,31 @@ class BlackboardTests(unittest.TestCase):
 
 class MemberSpecTests(unittest.TestCase):
     def test_validation(self):
-        self.assertEqual(MemberSpec.from_dict({"name": "a", "role": "skeptic"}).tool_profile(), "readonly")
-        with self.assertRaises(ValueError):
-            MemberSpec.from_dict({"name": "a", "role": "wizard"})
+        self.assertEqual(MemberSpec.from_dict({"name": "a", "role": "chair"}).tool_profile(), "readonly")
+        self.assertEqual(MemberSpec.from_dict({"name": "a", "role": "skeptic"}).tool_profile(), "core")  # old roles
+        self.assertEqual(MemberSpec.from_dict({"name": "a", "persona": "sage"}).name, "a")   # pre-1.2 files load
         with self.assertRaises(ValueError):
             MemberSpec.from_dict({"name": "a", "colour": "red"})
         with self.assertRaises(ValueError):
             Council([MemberSpec("a"), MemberSpec("a")], cfg())
 
     def test_members_get_role_tools_plus_board(self):
-        c = Council.from_config(None, cfg())
-        skeptic = c.members["skeptic"].agent.tools
-        self.assertIn("board_post", skeptic)
-        self.assertNotIn("run_shell", skeptic)            # read-only role
-        self.assertIn("run_shell", c.members["engineer"].agent.tools)
-        self.assertEqual(c.chair, "chair")
-        self.assertNotIn("chair", c.participants)
+        c = Council.from_config(None, cfg())              # the built-in agents; the first chairs
+        self.assertEqual(c.chair, "blue")
+        self.assertEqual(c.participants, ["green", "orange"])
+        self.assertIn("board_post", c.members["green"].agent.tools)
+        self.assertNotIn("run_shell", c.members["blue"].agent.tools)    # the chair only reads and sums up
+        self.assertIn("run_shell", c.members["green"].agent.tools)
+
+    def test_from_agents_uses_your_agent_files(self):
+        from hybrid_agent.agents import AgentProfile, save_agent
+        c0 = cfg()
+        c0.agents_dir = Path(tempfile.mkdtemp())
+        save_agent(AgentProfile("zed", "Zed", model="scripted"), c0.agents_dir)
+        c = Council.from_agents(["zed", "green"], c0)
+        self.assertEqual((c.chair, c.participants), ("zed", ["green"]))
+        with self.assertRaises(ValueError):
+            Council.from_agents(["nobody"], c0)
 
 
 class ProtocolTests(unittest.TestCase):
@@ -111,8 +120,8 @@ class ProtocolTests(unittest.TestCase):
     def test_roundtable_uses_tools_and_board(self):
         r = Council.from_config(None, cfg()).deliberate("Q?", protocol="roundtable")
         kinds = [(c.member, c.kind) for c in r.contributions]
-        self.assertIn(("chair", "synthesis"), kinds)
-        self.assertEqual(sum(1 for _, k in kinds if k == "opening"), 3)
+        self.assertIn(("blue", "synthesis"), kinds)
+        self.assertEqual(sum(1 for _, k in kinds if k == "opening"), 2)
         self.assertTrue(any(e["topic"] == "status" for e in r.board), "members should post via board_post")
 
     def test_debate_stops_early_on_consensus(self):
@@ -126,8 +135,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertIsNotNone(r.tally)
 
     def test_failed_member_sits_out(self):
-        specs = [MemberSpec("chair", "chair"), MemberSpec("ok", "researcher"),
-                 MemberSpec("broken", "skeptic", backend=Down("broken"))]
+        specs = [MemberSpec("chair", "chair"), MemberSpec("ok"), MemberSpec("broken", backend=Down("broken"))]
         r = Council(specs, cfg()).deliberate("Q?", protocol="roundtable")
         errs = [c for c in r.contributions if c.error]
         self.assertEqual([c.member for c in errs], ["broken"])
@@ -154,7 +162,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_config_file_and_save(self):
         data = {"protocol": "debate", "rounds": 1, "chair": "boss",
-                "members": [{"name": "boss", "role": "chair"}, {"name": "x", "role": "analyst", "weight": 2}]}
+                "members": [{"name": "boss", "role": "chair"}, {"name": "x", "weight": 2}]}
         c = Council.from_config(data, cfg())
         self.assertEqual(c.chair, "boss")
         r = c.deliberate("Q?")

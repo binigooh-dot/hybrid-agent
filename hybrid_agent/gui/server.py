@@ -1,4 +1,4 @@
-"""[GUI / server] The local web server behind Agent Studio. Standard library only.
+"""[GUI / server] The local web server behind the Hybrid Agent app. Standard library only.
 
 Security model (it runs on YOUR computer, so it is locked down):
   * listens on 127.0.0.1 only - unreachable from your network
@@ -14,10 +14,11 @@ import datetime as dt
 import hmac
 import json
 import os
-import platform
 import queue
 import secrets
 import shutil
+import subprocess
+import sys
 import threading
 import time
 import urllib.parse
@@ -28,26 +29,34 @@ from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
 from .. import __version__
-from ..backends import build_backend, build_local_backend
-from ..backends.router import RouterBackend
-from ..core.agent import DEFAULT_SYSTEM_PROMPT, Agent
+from ..agents import (
+    EXPRESSIONS,
+    AgentProfile,
+    delete_agent,
+    load_agents,
+    new_agent_id,
+    random_face,
+    render_all,
+    save_agent,
+)
+from ..agents.faces import COLORS, EYES, MOUTHS, TOPS
+from ..agents.store import BUILTIN
+from ..backends import build_backend
+from ..core.agent import Agent
 from ..core.config import Config
 from ..core.errors import AgentCancelled, ToolError
 from ..core.home import home_dir, state_dir
 from ..core.localserver import LocalServer
 from ..council.protocols import PROTOCOLS
-from ..council.roles import ROLES
-from ..personas import EXPRESSIONS, Persona, delete_persona, load_personas, random_face, render_all, save_persona
-from ..personas.faces import COLORS, EYES, HAIR, MOUTHS, NOSES, SHAPES
 from ..runtime import OllamaRuntime
 from ..tasks import Scheduler, Task, TaskStore, describe, execute
-from ..tools import PROFILES, ToolContext, build_full_registry, build_registry
+from ..tools import ToolContext, build_registry
 from .jobs import ApprovalBroker, EventBus, JobBusy, JobManager
 
 STATIC = Path(__file__).resolve().parent / "static"
-STATIC_FILES = {"app.js": "text/javascript", "app.css": "text/css", "favicon.svg": "image/svg+xml",
-                "fonts/face-mono.woff2": "font/woff2", "fonts/face-mono-LICENSE.txt": "text/plain"}
+STATIC_FILES = {"app.js": "text/javascript", "app.css": "text/css", "favicon.svg": "image/svg+xml"}
 MAX_BODY = 1_000_000
+STOCK_AGENTS = {aid for aid, _ in BUILTIN}
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
        "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
 
@@ -69,7 +78,7 @@ class App:
         self.jobs = JobManager(self.bus, self.broker)
         self.allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
         self._chat: Agent | None = None
-        self._chat_key: tuple | None = None
+        self._chat_key: str | None = None
         self._meta: tuple[float, dict] | None = None
         self._lock = threading.Lock()
         self.home = home_dir()                      # portable mode: everything under one folder
@@ -83,17 +92,22 @@ class App:
     def check_token(self, value: str | None) -> bool:
         return bool(value) and hmac.compare_digest(str(value).encode(), self.token.encode())
 
-    def personas(self) -> dict[str, Persona]:
-        return load_personas(self.cfg.persona_dir)
+    def agents(self) -> dict[str, AgentProfile]:
+        return load_agents(self.cfg.agents_dir)
 
     @staticmethod
-    def persona_payload(p: Persona) -> dict:
-        return {**p.to_dict(), "builtin": p.builtin, "faces": render_all(p.face)}
+    def agent_payload(a: AgentProfile) -> dict:
+        return {**a.to_dict(), "builtin": a.builtin, "stock": a.id in STOCK_AGENTS, "faces": render_all(a.face)}
 
-    def tools(self) -> list[dict]:
-        return [{"name": t.name, "category": t.category, "risk": t.risk, "approval": t.requires_approval,
-                 "description": t.description, "parameters": t.parameters}
-                for t in build_full_registry(ToolContext(workspace=self.cfg.workspace)).tools()]
+    def save_agent(self, body: dict) -> AgentProfile:
+        agents = self.agents()
+        if not body.get("id"):
+            body["id"] = new_agent_id(agents, str(body.get("name", "")))
+        a = AgentProfile.from_dict(body)
+        save_agent(a, self.cfg.agents_dir)
+        with self._lock:
+            self._chat = None
+        return self.agents()[a.id]
 
     def meta(self) -> dict:
         now = time.monotonic()
@@ -102,27 +116,26 @@ class App:
                 backend = build_backend(self.cfg).describe()
             except Exception as e:  # noqa: BLE001 - shown in the GUI instead of failing to load
                 backend = f"unavailable ({e})"
-            ctx = ToolContext(workspace=self.cfg.workspace)
             self._meta = (now, {
-                "version": __version__, "backend": backend, "workspace": str(self.cfg.workspace.resolve()),
-                "auto_approve": self.cfg.auto_approve, "safe_mode": self.cfg.safe_mode, "os": platform.system(),
-                "sandbox": self.cfg.sandbox,
-                "profiles": list(PROFILES), "profile_tools": {p: build_registry(ctx, p).names() for p in PROFILES},
-                "roles": {k: {"title": r.title, "tools": r.tools} for k, r in ROLES.items()},
-                "protocols": {k: p.description for k, p in PROTOCOLS.items()}, "expressions": list(EXPRESSIONS),
-                "face_parts": {"hair": list(HAIR), "shape": list(SHAPES), "eyes": list(EYES), "nose": list(NOSES),
-                               "mouth": list(MOUTHS), "colors": COLORS}})
+                "version": __version__, "backend": backend, "backend_mode": self.cfg.backend,
+                "workspace": str(self.cfg.workspace.resolve()), "auto_approve": self.cfg.auto_approve,
+                "safe_mode": self.cfg.safe_mode, "protocols": {k: p.description for k, p in PROTOCOLS.items()},
+                "expressions": list(EXPRESSIONS),
+                "face_parts": {"top": list(TOPS), "eyes": list(EYES), "mouth": list(MOUTHS), "colors": COLORS}})
         return {**self._meta[1], "busy": self.jobs.status()}
 
     def safety(self) -> dict:
-        """Everything protecting the computer, for the Safety tab."""
+        """Everything protecting the computer, for Settings > Safety."""
         from ..security.audit import verify_manifest
         from ..security.backup import list_backups
         from ..security.protected import protected_paths
         from ..security.sandbox import strict_available
         tool, mode = strict_available(), self.cfg.sandbox
         sandbox = "off" if mode == "off" else f"strict ({tool})" if tool and mode in {"auto", "strict"} else "limits only"
-        return {"sandbox": sandbox, "require_sandbox": self.cfg.require_sandbox, "safe_mode": self.cfg.safe_mode,
+        detail = ("Only the workspace is writable." if sandbox.startswith("strict") else
+                  "Commands ask first, have a time limit and never see your keys." if os.name == "nt" else
+                  "Time, memory and file-size limits on every command.")
+        return {"sandbox": sandbox, "sandbox_detail": detail, "require_sandbox": self.cfg.require_sandbox, "safe_mode": self.cfg.safe_mode,
                 "auto_approve": self.cfg.auto_approve, "min_free_mb": self.cfg.min_free_mb,
                 "disk_free_gb": round(shutil.disk_usage(self.cfg.workspace).free / 1e9, 1),
                 "protected": len(protected_paths()), "workspace": str(self.cfg.workspace.resolve()),
@@ -168,7 +181,7 @@ class App:
         return {"tasks": [{**asdict(t), "when": describe(t.schedule)} for t in self.store.all()],
                 "scheduler": self.scheduler.status(), "running": self.jobs.status(), "runs": self.store.runs(40)}
 
-    # ------------------------------------------------------------ control panel
+    # ------------------------------------------------------------ settings
     def control(self) -> dict:
         from ..core.home import EDITABLE, read_settings
         return {"home": str(self.home) if self.home else None, "portable": bool(self.home),
@@ -200,6 +213,12 @@ class App:
             self._chat, self._meta = None, None
         return self.control()
 
+    def setup(self, model: str | None) -> dict:
+        """One click: engine + a model sized for this computer, then make it the one agents use."""
+        model = (model or "").strip() or self.runtime.status()["recommended"]
+        self.runtime.setup(model, self.runtime_progress, lambda m: self.change_settings({"LOCAL_MODEL": m}))
+        return {"model": model}
+
     def online_check(self) -> list[dict]:
         """Can the agents reach the internet from this computer? Runs the real tools, in parallel."""
         from concurrent.futures import ThreadPoolExecutor
@@ -223,55 +242,39 @@ class App:
             return list(pool.map(one, checks))
 
     # ------------------------------------------------------------ jobs
-    def chat_agent(self, persona_id: str | None, profile: str | None) -> Agent:
-        key = (persona_id or "", profile or "")
+    def chat_agent(self, agent_id: str | None) -> Agent:
+        from ..agents.build import build_agent
         with self._lock:
-            if self._chat is None or self._chat_key != key:
-                backend = build_backend(self.cfg)
-                claude = isinstance(backend, RouterBackend)
-                ctx = ToolContext.from_config(self.cfg, approver=self.broker.approver("chat"),
-                                              ask_user=self.broker.asker("chat"),
-                                              local_backend=build_local_backend(self.cfg) if claude else None)
-                tools = build_registry(ctx, profile or ("full" if claude else "core"), include_delegate=claude,
-                                       safe_mode=self.cfg.safe_mode)
-                system, name = DEFAULT_SYSTEM_PROMPT.format(os=platform.system()), "chat"
-                if persona_id:
-                    p = self.personas().get(persona_id)
-                    if not p:
-                        raise HTTPError(404, f"unknown persona {persona_id}")
-                    system += f"\n\nYou are {p.name}, {p.title}.\n{p.persona_text()}"
-                    name = p.id
-
-                def relay(kind: str, data: dict) -> None:
-                    self.bus.publish("agent", kind=kind, data=data)
-                self._chat = Agent(backend, tools, system_prompt=system, max_steps=self.cfg.max_steps,
-                                   log_dir=self.cfg.log_dir, name=name, on_event=relay,
-                                   context_chars=self.cfg.context_chars())
-                self._chat_key = key
+            if self._chat is None or self._chat_key != agent_id:
+                who = agent_id or "chat"              # the approval dialog names the agent asking
+                self._chat = build_agent(self.cfg, agent_id, approver=self.broker.approver(who),
+                                         asker=self.broker.asker(who),
+                                         on_event=lambda kind, data: self.bus.publish("agent", kind=kind, data=data))
+                self._chat_key = agent_id
             return self._chat
 
     def start_chat(self, body: dict) -> str:
         message = str(body.get("message", "")).strip()
         if not message:
             raise HTTPError(400, "message is empty")
-        agent = self.chat_agent(body.get("persona") or None, body.get("profile") or None)
+        agent = self.chat_agent(body.get("agent") or None)
         return self.jobs.start("chat", lambda: {"answer": agent.run(message[:20000]), "usage": agent.usage},
                                cancel=agent.cancel)
 
     def start_council(self, body: dict) -> str:
         from ..council import Council
         question = str(body.get("question", "")).strip()
-        ids = [str(p) for p in body.get("personas", [])][:8]
+        ids = [str(a) for a in body.get("agents", [])][:8]
         protocol = body.get("protocol", "roundtable")
         if not question or not ids:
-            raise HTTPError(400, "give a question and at least one persona")
+            raise HTTPError(400, "give a question and at least one agent")
         if protocol not in PROTOCOLS:
             raise HTTPError(400, f"unknown protocol {protocol}")
         options = [str(o).strip() for o in body.get("options", []) if str(o).strip()][:8] or None
         rounds = max(1, min(int(body.get("rounds", 2)), 5))
-        council = Council.from_personas(ids, self.cfg, chair=body.get("chair") or None,
-                                        on_event=lambda kind, d: self.bus.publish(kind, **d),
-                                        approver=self.broker.approver("council"), ask_user=self.broker.asker("council"))
+        council = Council.from_agents(ids, self.cfg, chair=body.get("chair") or None,
+                                      on_event=lambda kind, d: self.bus.publish(kind, **d),
+                                      approver=self.broker.approver("council"), ask_user=self.broker.asker("council"))
 
         def run():
             self.bus.publish("council_setup", chair=council.chair, members=list(council.members),
@@ -298,7 +301,7 @@ def route(method: str, path: str, prefix: bool = False):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version, sys_version = "AgentStudio", ""
+    server_version, sys_version = "HybridAgent", ""
     app: App
 
     def log_message(self, *_args):  # quiet; the GUI is the log
@@ -380,8 +383,8 @@ class Handler(BaseHTTPRequestHandler):
     @route("GET", "/")
     def page_index(self, path, query):
         if not self.app.check_token(query.get("token")):
-            self._send(401, "<h1>Agent Studio</h1><p>Open the full link (with <code>?token=</code>) printed in "
-                            "the terminal where you started the GUI.</p>", "text/html")
+            self._send(401, "<h1>Hybrid Agent</h1><p>Open the full link (with <code>?token=</code>) printed in "
+                            "the window where you started the app.</p>", "text/html")
             return
         self._send(200, (STATIC / "index.html").read_bytes(), "text/html")
 
@@ -392,36 +395,22 @@ class Handler(BaseHTTPRequestHandler):
             raise HTTPError(404, "not found")
         self._send(200, (STATIC / name).read_bytes(), STATIC_FILES[name])
 
-    @route("GET", "/guide")
-    def page_guide(self, path, query):
-        from .guide import build_guide_html
-        nonce = secrets.token_urlsafe(16)
-        self._send(200, build_guide_html(nonce=nonce, cfg=self.app.cfg), "text/html",
-                   csp=CSP.replace("script-src 'self'", f"script-src 'nonce-{nonce}'") + "; font-src 'self' data:")
-
     # ----------------------------------------------------------- api
     @route("GET", "/api/meta")
     def api_meta(self, path, query):
         self._send(200, self.app.meta())
 
-    @route("GET", "/api/tools")
-    def api_tools(self, path, query):
-        self._send(200, self.app.tools())
+    @route("GET", "/api/agents")
+    def api_agents(self, path, query):
+        self._send(200, [self.app.agent_payload(a) for a in self.app.agents().values()])
 
-    @route("GET", "/api/personas")
-    def api_personas(self, path, query):
-        self._send(200, [self.app.persona_payload(p) for p in self.app.personas().values()])
+    @route("POST", "/api/agents")
+    def api_save_agent(self, path, query):
+        self._send(200, self.app.agent_payload(self.app.save_agent(self._body())))
 
-    @route("POST", "/api/personas")
-    def api_save_persona(self, path, query):
-        body = {k: v for k, v in self._body().items() if k not in {"builtin", "faces"}}
-        p = Persona.from_dict(body)
-        save_persona(p, self.app.cfg.persona_dir)
-        self._send(200, self.app.persona_payload(p))
-
-    @route("DELETE", "/api/personas/", prefix=True)
-    def api_delete_persona(self, path, query):
-        self._send(200, {"deleted": delete_persona(path.removeprefix("/api/personas/"), self.app.cfg.persona_dir)})
+    @route("DELETE", "/api/agents/", prefix=True)
+    def api_delete_agent(self, path, query):
+        self._send(200, {"deleted": delete_agent(path.removeprefix("/api/agents/"), self.app.cfg.agents_dir)})
 
     @route("POST", "/api/face")
     def api_face(self, path, query):
@@ -485,7 +474,7 @@ class Handler(BaseHTTPRequestHandler):
         except KeyError:
             raise HTTPError(404, "no such result") from None
 
-    # ------------------------------------------------------ control panel
+    # ------------------------------------------------------ settings
     @route("GET", "/api/control")
     def api_control(self, path, query):
         self._send(200, self.app.control())
@@ -510,6 +499,13 @@ class Handler(BaseHTTPRequestHandler):
         except RuntimeError as e:
             raise HTTPError(409, str(e)) from None
         self._send(200, {"result": result, "runtime": rt.status()})
+
+    @route("POST", "/api/setup")
+    def api_setup(self, path, query):
+        try:
+            self._send(202, self.app.setup(self._body().get("model")))
+        except RuntimeError as e:
+            raise HTTPError(409, str(e)) from None
 
     @route("POST", "/api/models")
     def api_models(self, path, query):
@@ -607,17 +603,32 @@ def create_server(cfg: Config, port: int = 8765, state: Path | None = None) -> t
     return srv, app
 
 
+def open_window(url: str) -> None:
+    """Open the app in its own window (Microsoft Edge app mode on Windows), else the default browser."""
+    if sys.platform == "win32":
+        for base in (os.environ.get("ProgramFiles(x86)"), os.environ.get("ProgramFiles"), os.environ.get("LOCALAPPDATA")):
+            edge = Path(base or "-") / "Microsoft" / "Edge" / "Application" / "msedge.exe"
+            if edge.is_file():
+                try:
+                    subprocess.Popen([str(edge), f"--app={url}"], stdin=subprocess.DEVNULL,  # nosec B603
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    return
+                except OSError:
+                    break
+    webbrowser.open(url)
+
+
 def serve(cfg: Config, port: int = 8765, open_browser: bool = True, url_file: Path | None = None,
           runtime: OllamaRuntime | None = None) -> int:
-    """Run Agent Studio until Ctrl+C or the GUI's Quit button. url_file: where the launcher
+    """Run the app until Ctrl+C or the Quit button in Settings. url_file: where the launcher
     records the link, so starting the app a second time just reopens the browser."""
     try:
         srv, app = create_server(cfg, port)
     except OSError:                               # port taken (another program): pick any free one
         srv, app = create_server(cfg, 0)
     url = f"http://127.0.0.1:{app.port}/?token={app.token}"
-    print(f"\n  Agent Studio is running:\n\n    {url}\n\n  Only this computer can connect; the link changes every "
-          f"launch.\n  Close this window or press Ctrl+C to stop (or use Quit in the Control panel).\n")
+    print(f"  Open: {url}\n  (only this computer can connect; the link changes every launch)\n\n"
+          f"  Keep this window open while you use Hybrid Agent. Close it to stop.\n")
     if url_file:
         url_file.parent.mkdir(parents=True, exist_ok=True)
         url_file.write_text(url, encoding="utf-8")
@@ -626,7 +637,7 @@ def serve(cfg: Config, port: int = 8765, open_browser: bool = True, url_file: Pa
     app.on_quit = srv.shutdown
     app.scheduler.start()
     if open_browser:
-        threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+        threading.Timer(0.8, open_window, args=(url,)).start()
     try:
         srv.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:

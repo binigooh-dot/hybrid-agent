@@ -3,7 +3,7 @@
 Three groups:
   SYSTEM   - operating system, boot loader, devices, firmware/hardware interfaces
   USER     - keys, credentials and shell/startup configs in your home folder
-  AGENT    - the agent's own code, config, personas and audit log
+  AGENT    - the agent's own code, config, task queue, model engine and models
 
 Enforced in three places:
   * validate_workspace refuses a workspace that overlaps any protected path

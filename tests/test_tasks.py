@@ -105,7 +105,7 @@ class SafePermissionTests(unittest.TestCase):
         from hybrid_agent.core.config import Config
         from hybrid_agent.tasks import execute
         tmp = Path(tempfile.mkdtemp())
-        cfg = Config(backend="scripted", workspace=tmp / "ws", log_dir=None, persona_dir=tmp / "p")
+        cfg = Config(backend="scripted", workspace=tmp / "ws", log_dir=None, agents_dir=tmp / "a")
         cfg.workspace.mkdir()
         execute(Task(name="demo", prompt="demo", permission="safe"), cfg)
         self.assertFalse((cfg.workspace / "demo.txt").exists())
@@ -122,7 +122,7 @@ class TaskApiTests(unittest.TestCase):
         from hybrid_agent.core.config import Config
         from hybrid_agent.gui.server import create_server
         tmp = Path(tempfile.mkdtemp())
-        cfg = Config(backend="scripted", workspace=tmp / "ws", log_dir=tmp / "logs", persona_dir=tmp / "p")
+        cfg = Config(backend="scripted", workspace=tmp / "ws", log_dir=tmp / "logs", agents_dir=tmp / "a")
         cfg.workspace.mkdir()
         srv, app = create_server(cfg, port=0, state=tmp)
         threading.Thread(target=srv.serve_forever, daemon=True).start()

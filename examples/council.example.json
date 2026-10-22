@@ -1,16 +1,6 @@
 {
-  "_comment": "[EXAMPLE / council config] Mixed council: Claude chairs, local models debate. Needs ANTHROPIC_API_KEY for the chair (it falls back to the local model without one). Use with: python -m hybrid_agent council --council-config examples/council.example.json -p \"...\"",
+  "_comment": "[EXAMPLE / council config] Your agents decide together; the first one chairs and sums up. For more varied views give each agent a different model (Agents tab). Run: HybridAgent.exe council --council-config examples/council.example.json -p \"Rust or Go?\"",
   "protocol": "debate",
   "rounds": 2,
-  "tally_mode": "weighted",
-  "workers": 1,
-  "chair": "chair",
-  "members": [
-    {"name": "chair",      "role": "chair",      "backend": "claude"},
-    {"name": "researcher", "role": "researcher", "backend": "local:qwen2.5:7b"},
-    {"name": "skeptic",    "role": "skeptic",    "backend": "local:llama3.1:8b", "tools": "readonly,+web_search"},
-    {"name": "engineer",   "role": "engineer",   "backend": "local:qwen2.5:7b",  "weight": 1.5},
-    {"name": "advocate",   "role": "advocate",   "backend": "local",
-     "persona": "You speak for a non-technical small-business owner who will use the result every day."}
-  ]
+  "agents": ["blue", "green", "orange"]
 }

@@ -3,9 +3,10 @@
     home/runtime/ollama/    the engine, downloaded on request from ollama.com
     home/models/            the model files (OLLAMA_MODELS points here)
 
-The Control panel can install the engine, start/stop it, download ("pull") and
-delete models, and shows progress. If Ollama is already installed on the
-computer (or already running), that one is used instead - nothing is duplicated.
+Settings can install the engine, start/stop it, download ("pull") and delete
+models, with progress. "Set up" does all of it in one click, with a model sized
+for this computer's memory. If Ollama is already installed on the computer (or
+already running), that one is used instead - nothing is duplicated.
 
 The engine listens on 127.0.0.1 only, so nothing outside this computer can use it.
 
@@ -34,17 +35,45 @@ HOST = "127.0.0.1:11434"
 BASE = f"http://{HOST}"
 DOWNLOAD_BASE = "https://ollama.com/download/"
 
-# name, download size, RAM needed, suggested tool profile, notes (shown in the Control panel and the guide)
+# name, download size, memory needed, notes (shown in Settings). min_gb: the smallest computer we suggest it for.
 MODELS = [
-    ("qwen2.5:1.5b", "~1 GB", "2-3 GB", "minimal", "Tiny and fast; fine for lookups and testing"),
-    ("qwen2.5:3b", "~2 GB", "4 GB", "minimal", "Low-end laptops; simple tasks"),
-    ("llama3.2:3b", "~2 GB", "4 GB", "minimal", "Similar tier"),
-    ("qwen2.5:7b", "~4.7 GB", "8 GB", "core", "Default: good balance"),
-    ("llama3.1:8b", "~4.9 GB", "8 GB", "core", "Solid general model; good council contrast to qwen"),
-    ("mistral-nemo:12b", "~7 GB", "12 GB", "core / coding", "Strong reasoning for its size"),
-    ("qwen2.5:14b", "~9 GB", "16 GB", "coding / research", "Much better at multi-step work"),
-    ("qwen2.5:32b", "~20 GB", "24-32 GB / GPU", "full", "Approaches hosted-model quality on many tasks"),
+    ("qwen2.5:1.5b", "~1 GB", "4 GB", "Tiny and fast; simple lookups"),
+    ("qwen2.5:3b", "~2 GB", "6 GB", "Light laptops; everyday tasks"),
+    ("qwen2.5:7b", "~4.7 GB", "12 GB", "Good balance (recommended for most)"),
+    ("llama3.1:8b", "~4.9 GB", "12 GB", "Solid all-rounder; a different voice for councils"),
+    ("qwen2.5:14b", "~9 GB", "24 GB", "Much better at multi-step work"),
 ]
+_BY_MEMORY = [(6, "qwen2.5:1.5b"), (12, "qwen2.5:3b"), (24, "qwen2.5:7b")]   # under N GB -> model
+
+
+def total_ram_gb() -> float:
+    """This computer's memory in GB (0 if unknown)."""
+    try:
+        if sys.platform == "win32":
+            import ctypes
+
+            class MemStatus(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                            ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+            m = MemStatus()
+            m.dwLength = ctypes.sizeof(m)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m)):  # type: ignore[attr-defined]
+                return round(m.ullTotalPhys / 2**30, 1)
+            return 0.0
+        return round(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 2**30, 1)
+    except (OSError, ValueError, AttributeError):
+        return 0.0
+
+
+def recommend_model(ram_gb: float | None = None) -> str:
+    """The model we suggest for this much memory: big enough to be useful, small enough to stay quick."""
+    ram = total_ram_gb() if ram_gb is None else ram_gb
+    if not ram:
+        return "qwen2.5:3b"
+    return next((name for limit, name in _BY_MEMORY if ram < limit), "qwen2.5:14b")
 
 
 def _archive_name() -> str | None:
@@ -104,7 +133,8 @@ class OllamaRuntime:
         out: dict[str, Any] = {"installed": bool(b), "bundled": bool(b and self.dir in b.parents), "binary": str(b) if b else None,
                "running": up, "managed": bool(self.proc and self.proc.poll() is None), "url": BASE,
                "models_dir": str(self.models_dir), "models": [], "loaded": [], "version": None,
-               "task": self.task, "archive": _archive_name(), "suggested": MODELS}
+               "task": self.task, "archive": _archive_name(), "suggested": MODELS,
+               "ram_gb": total_ram_gb(), "recommended": recommend_model()}
         if up:
             try:
                 with _api("/api/version") as r:
@@ -176,60 +206,88 @@ class OllamaRuntime:
 
     def install(self, on_progress: Callable[[dict], None]) -> None:
         """Download the engine from ollama.com into home/runtime/ollama (about 1.6 GB on Windows)."""
+        self._check_installable()
+        self._background("install", "engine", lambda job: self._install(job, on_progress), on_progress)
+
+    def pull(self, model: str, on_progress: Callable[[dict], None]) -> None:
+        """Download a model into home/models via the engine (progress streamed from Ollama)."""
+        model = _check_model(model)
+        if not self.running():
+            raise RuntimeError("Start the engine first.")
+        self._background("pull", model, lambda job: self._pull(model, job, on_progress), on_progress)
+
+    def setup(self, model: str, on_progress: Callable[[dict], None], on_ready: Callable[[str], object]) -> None:
+        """One click: install the engine if needed, start it, download `model`, then on_ready(model)."""
+        model = _check_model(model)
+        if not self.binary():
+            self._check_installable()
+
+        def work(job: dict):
+            if not self.binary():
+                self._install(job, on_progress)
+            if not self.running():
+                job.update(status="starting the engine", done=0, total=0)
+                on_progress(dict(job))
+                self.start()
+            if not any(m["name"] in (model, f"{model}:latest") for m in self.status()["models"]):
+                job.update(status="downloading the model", done=0, total=0)
+                self._pull(model, job, on_progress)
+            on_ready(model)
+        self._background("setup", model, work, on_progress)
+
+    def _check_installable(self) -> None:
         name = _archive_name()
         if not name:
             raise RuntimeError("No Ollama download for this operating system.")
         if name.endswith(".zst") and not (shutil.which("zstd") or sys.version_info >= (3, 14)):
             raise RuntimeError("Unpacking needs `zstd` (Linux: sudo apt install zstd), or install Ollama "
-                               "from https://ollama.com/download - the Control panel will use it.")
+                               "from https://ollama.com/download - Settings will use it.")
 
-        def work(job: dict):
-            from ..security.guards import ensure_disk_space
-            self.dir.mkdir(parents=True, exist_ok=True)
-            archive = self.dir.parent / name
-            req = urllib.request.Request(DOWNLOAD_BASE + name, headers={"User-Agent": "HybridAgent"})
-            with urllib.request.urlopen(req, timeout=60) as r:  # nosec B310 - fixed https://ollama.com URL
-                total = int(r.headers.get("Content-Length") or 0)
-                ensure_disk_space(self.dir, int(total * 3 / 1e6) + 512)   # archive + unpacked + headroom
-                job.update(total=total, status="downloading")
-                with archive.open("wb") as f:
-                    while chunk := r.read(1 << 20):
-                        f.write(chunk)
-                        job["done"] += len(chunk)
-                        on_progress(dict(job))
-            job.update(status="unpacking")
-            on_progress(dict(job))
-            try:
-                _extract(archive, self.dir)
-            finally:
-                archive.unlink(missing_ok=True)
-            b = self.binary()
-            if b and os.name == "posix":
-                b.chmod(0o755)
-        self._background("install", "engine", work, on_progress)
-
-    def pull(self, model: str, on_progress: Callable[[dict], None]) -> None:
-        """Download a model into home/models via the engine (progress streamed from Ollama)."""
-        model = model.strip()
-        if not MODEL_NAME.match(model) or ".." in model:
-            raise ValueError("model names look like qwen2.5:7b")
-        if not self.running():
-            raise RuntimeError("Start the engine first.")
-
-        def work(job: dict):
-            with _api("/api/pull", {"model": model, "stream": True}, timeout=3600) as r:
-                for line in r:
-                    d = json.loads(line or b"{}")
-                    if d.get("error"):
-                        raise RuntimeError(d["error"])
-                    job.update(status=d.get("status", ""), total=d.get("total") or job["total"],
-                                     done=d.get("completed") or job["done"])
+    def _install(self, job: dict, on_progress: Callable[[dict], None]) -> None:
+        from ..security.guards import ensure_disk_space
+        name = _archive_name() or ""
+        self.dir.mkdir(parents=True, exist_ok=True)
+        archive = self.dir.parent / name
+        req = urllib.request.Request(DOWNLOAD_BASE + name, headers={"User-Agent": "HybridAgent"})
+        with urllib.request.urlopen(req, timeout=60) as r:  # nosec B310 - fixed https://ollama.com URL
+            total = int(r.headers.get("Content-Length") or 0)
+            ensure_disk_space(self.dir, int(total * 3 / 1e6) + 512)   # archive + unpacked + headroom
+            job.update(total=total, done=0, status="downloading the engine")
+            with archive.open("wb") as f:
+                while chunk := r.read(1 << 20):
+                    f.write(chunk)
+                    job["done"] += len(chunk)
                     on_progress(dict(job))
-        self._background("pull", model, work, on_progress)
+        job.update(status="unpacking the engine")
+        on_progress(dict(job))
+        try:
+            _extract(archive, self.dir)
+        finally:
+            archive.unlink(missing_ok=True)
+        b = self.binary()
+        if b and os.name == "posix":
+            b.chmod(0o755)
+
+    def _pull(self, model: str, job: dict, on_progress: Callable[[dict], None]) -> None:
+        with _api("/api/pull", {"model": model, "stream": True}, timeout=3600) as r:
+            for line in r:
+                d = json.loads(line or b"{}")
+                if d.get("error"):
+                    raise RuntimeError(d["error"])
+                job.update(status=d.get("status", ""), total=d.get("total") or job["total"],
+                           done=d.get("completed") or job["done"])
+                on_progress(dict(job))
 
     def delete(self, model: str) -> None:
         with _api("/api/delete", {"model": model}, method="DELETE"):
             pass
+
+
+def _check_model(model: str) -> str:
+    model = model.strip()
+    if not MODEL_NAME.match(model) or ".." in model:
+        raise ValueError("model names look like qwen2.5:7b")
+    return model
 
 
 def _extract(archive: Path, dest: Path) -> None:

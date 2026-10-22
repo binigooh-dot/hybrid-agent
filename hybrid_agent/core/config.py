@@ -79,7 +79,7 @@ class Config:
     # --- Council (multi-agent) ---
     council_config: Path | None = None   # JSON file describing members
     council_workers: int = 1             # members run in parallel threads (1 = one at a time)
-    persona_dir: Path = field(default_factory=lambda: Path("personas"))  # your persona JSON files
+    agents_dir: Path = field(default_factory=lambda: Path("agents"))     # your agents (JSON files)
 
     def context_chars(self) -> int:
         """History budget for local models: ~60% of the context window, ~4 chars per token
@@ -135,7 +135,7 @@ class Config:
             tool_profile=e("AGENT_TOOL_PROFILE", "auto"),
             council_config=Path(e("COUNCIL_CONFIG", "")) if e("COUNCIL_CONFIG") else None,
             council_workers=int(e("COUNCIL_WORKERS", "1")),
-            persona_dir=Path(e("AGENT_PERSONA_DIR", "personas")),
+            agents_dir=Path(e("AGENTS_DIR", "agents")),
         )
 
 

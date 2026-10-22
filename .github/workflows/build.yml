@@ -1,10 +1,6 @@
-# [CI / build] Test on real Windows and Linux, then build the self-contained app for each.
-# Runs on every push and pull request. A version tag (v1.2.3) - e.g. from publishing a GitHub Release -
-# also attaches HybridAgent-<version>-<os>.zip, the wheel/sdist and SHA256SUMS to that release.
-# macOS has its own workflow (macos.yml) so a busy macOS runner queue never turns this one red.
-#
-# Linux is pinned to ubuntu-24.04: a packaged Linux app runs on systems with the same or newer C library
-# (glibc) than the machine that built it, so building on an older image keeps the download widely usable.
+# [CI / build] Every push and pull request: run the tests and safety drills on Windows and Linux, then build
+# HybridAgent.exe on Windows and smoke-test it. A version tag (v1.2.3) - e.g. from publishing a GitHub
+# Release - also attaches HybridAgent-<version>-windows-x64.zip and SHA256SUMS to that release.
 # All actions are on their Node 24 versions (Node 20 is deprecated on GitHub's runners).
 name: build
 
@@ -19,72 +15,71 @@ permissions:
   contents: read
 
 jobs:
-  test-and-build:
+  test:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: windows-latest
-            name: windows
-          - os: ubuntu-24.04
-            name: linux
+        os: [windows-latest, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - name: Install build + test tools
-        run: python -m pip install pyinstaller tzdata fonttools brotli
+      - name: Time-zone data (Windows has none built in)
+        run: python -m pip install tzdata
       - name: Linux sandbox (bubblewrap)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y bubblewrap
       - name: Unit + integration tests
         run: python -m unittest discover -s tests -t . -v
-      - name: Safety drills (from source)
+      - name: Safety drills
         run: python -m hybrid_agent diagnose
-      - name: Build the app
-        run: python scripts/build_exe.py
-      - name: Smoke-test the built app
-        shell: bash
-        run: |
-          cd dist/HybridAgent
-          ./HybridAgent* --hybrid-python -X utf8 -c "import zoneinfo, sqlite3; print('internal python ok')"
-          ./HybridAgent* doctor || true          # no model on CI: required checks are expected to fail
-          ./HybridAgent* diagnose
-      - uses: actions/upload-artifact@v6
-        with:
-          name: HybridAgent-${{ matrix.name }}
-          path: dist/*.zip
 
-  release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: test-and-build
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
+  windows-app:
+    needs: test
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - name: Wheel + sdist
-        run: python -m pip install build && python scripts/build_release.py
+      - name: Install the build tools
+        run: python -m pip install pyinstaller tzdata
+      - name: Build HybridAgent.exe
+        run: python scripts/build_exe.py
+      - name: Smoke-test the built app
+        shell: bash
+        run: |
+          cd dist/HybridAgent
+          test -f "START HERE.txt"
+          ./HybridAgent.exe --hybrid-python -X utf8 -c "import zoneinfo, sqlite3; print('internal python ok')"
+          ./HybridAgent.exe doctor || true       # no model on CI: the model checks are expected to fail
+          ./HybridAgent.exe diagnose
+      - uses: actions/upload-artifact@v6
+        with:
+          name: HybridAgent-windows
+          path: dist/*.zip
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: windows-app
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
       - uses: actions/download-artifact@v7
         with:
-          path: artifacts
-          pattern: HybridAgent-*
-      - name: Require the Windows and Linux builds
-        run: ls artifacts/HybridAgent-windows/*.zip artifacts/HybridAgent-linux/*.zip
-      - name: Collect files and checksums
+          name: HybridAgent-windows
+          path: out
+      - name: Checksums
         run: |
-          mkdir out && cp artifacts/*/*.zip dist/*.whl dist/*.tar.gz out/
-          cd out && sha256sum * > SHA256SUMS
+          ls out/HybridAgent-*-windows-x64.zip
+          cd out && sha256sum *.zip > SHA256SUMS
       - uses: softprops/action-gh-release@v3
         with:
           body_path: RELEASE_NOTES.md
           files: |
             out/*.zip
-            out/*.whl
-            out/*.tar.gz
             out/SHA256SUMS

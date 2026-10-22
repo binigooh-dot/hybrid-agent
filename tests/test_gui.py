@@ -14,7 +14,6 @@ import urllib.request
 from pathlib import Path
 
 from hybrid_agent.core.config import Config
-from hybrid_agent.gui.guide import ENV_VARS, build_guide_html
 from hybrid_agent.gui.jobs import ApprovalBroker, EventBus
 from hybrid_agent.gui.server import create_server
 
@@ -23,7 +22,7 @@ class GuiServerTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         tmp = Path(tempfile.mkdtemp())
-        cls.cfg = Config(backend="scripted", workspace=tmp / "ws", log_dir=tmp / "logs", persona_dir=tmp / "personas")
+        cls.cfg = Config(backend="scripted", workspace=tmp / "ws", log_dir=tmp / "logs", agents_dir=tmp / "agents")
         cls.cfg.workspace.mkdir()
         cls.srv, cls.app = create_server(cls.cfg, port=0, state=tmp)
         threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
@@ -48,13 +47,14 @@ class GuiServerTests(unittest.TestCase):
             raw = e.read()
             return e.code, (json.loads(raw) if raw.startswith(b"{") else raw), e.headers
 
-    def wait_job(self, kind, timeout=20):
+    def wait_job(self, kind, job_id=None, timeout=20):
         q = self.app.bus.subscribe(0)
         try:
             end = time.time() + timeout
             while time.time() < end:
                 e = q.get(timeout=timeout)
-                if e["type"] in {"job_done", "job_error", "job_cancelled"} and e.get("kind") == kind:
+                if e["type"] in {"job_done", "job_error", "job_cancelled"} and e.get("kind") == kind \
+                        and job_id in (None, e.get("job_id")):
                     return e
         finally:
             self.app.bus.unsubscribe(q)
@@ -74,7 +74,7 @@ class GuiServerTests(unittest.TestCase):
         self.assertEqual(status, 401)
         status, body, headers = self.req("GET", f"/?token={self.app.token}", token=False)
         self.assertEqual(status, 200)
-        self.assertIn(b"Agent Studio", body)
+        self.assertIn(b"Hybrid Agent", body)
         self.assertIn("script-src 'self'", headers["Content-Security-Policy"])
         self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
 
@@ -92,19 +92,21 @@ class GuiServerTests(unittest.TestCase):
         self.assertEqual(self.req("POST", "/api/face", headers={"Content-Type": "text/plain"})[0], 415)
         self.assertEqual(self.req("POST", "/api/face", {"face": "x" * 1_100_000})[0], 413)
 
-    def test_persona_ids_cannot_escape_folder(self):
-        for bad in ("../evil", "a/b", "UPPER", ""):
-            self.assertEqual(self.req("POST", "/api/personas", {"id": bad, "name": "x"})[0], 400, bad)
-        self.assertEqual(self.req("DELETE", "/api/personas/..%2Fx")[0], 400)
+    def test_agent_ids_cannot_escape_folder(self):
+        for bad in ("../evil", "a/b", "UPPER"):
+            self.assertEqual(self.req("POST", "/api/agents", {"id": bad, "name": "x"})[0], 400, bad)
+        self.assertEqual(self.req("DELETE", "/api/agents/..%2Fx")[0], 400)
+        self.assertEqual(self.req("POST", "/api/agents", {"name": "x", "model": "local:$(rm -rf /)"})[0], 400)
 
     def test_face_values_come_from_fixed_menus(self):
         evil = '"/><script>alert(1)</script>'
-        status, body, _ = self.req("POST", "/api/face", {"face": {"hair": evil, "color": evil, "eyes": evil}})
+        status, body, _ = self.req("POST", "/api/face", {"face": {"top": evil, "color": evil, "eyes": evil}})
         self.assertEqual(status, 200)
         frames = [f for fs in body["faces"].values() for f in fs]
         self.assertTrue(all("<" not in f and len(f.splitlines()) == 7 for f in frames))
-        self.assertEqual(len(body["faces"]["speaking"]), 4)       # talking animation
-        self.assertEqual(len(body["faces"]["thinking"]), 4)       # deliberating animation
+        self.assertTrue(all(32 <= ord(c) < 127 for f in frames for c in f.replace("\n", "")), "plain ASCII only")
+        self.assertEqual(len(body["faces"]["talking"]), 4)        # mouth opens and closes
+        self.assertEqual(len(body["faces"]["thinking"]), 4)
 
     def test_safety_and_restore(self):
         from hybrid_agent.security.backup import snapshot
@@ -120,50 +122,68 @@ class GuiServerTests(unittest.TestCase):
         self.assertEqual(self.req("POST", "/api/restore", {"id": "nope"})[0], 400)
 
     # ----------------------------------------------------------------- api
-    def test_meta_tools_personas(self):
+    def test_meta_and_agents(self):
         _, meta, _ = self.req("GET", "/api/meta")
         self.assertIn("roundtable", meta["protocols"])
-        self.assertIn("core", meta["profile_tools"])
-        _, tools, _ = self.req("GET", "/api/tools")
-        self.assertGreaterEqual(len(tools), 75)
-        _, personas, _ = self.req("GET", "/api/personas")
-        ids = {p["id"] for p in personas}
-        self.assertTrue({"sage", "vex", "nova"} <= ids)
-        self.assertEqual(len(personas[0]["faces"]), 8)          # 7 expressions + blink
+        self.assertEqual(set(meta["face_parts"]), {"top", "eyes", "mouth", "colors"})
+        _, agents, _ = self.req("GET", "/api/agents")
+        self.assertEqual([a["id"] for a in agents][:3], ["blue", "green", "orange"])
+        self.assertEqual(len(agents[0]["faces"]), 6)              # 5 expressions + blink
+        self.assertEqual(self.req("GET", "/api/tools")[0], 404)   # the tool browser is gone
 
-    def test_persona_save_and_delete(self):
-        p = {"id": "atlas", "name": "Atlas", "role": "engineer", "face": {"hair": "spiky"}}
-        status, saved, _ = self.req("POST", "/api/personas", p)
-        self.assertEqual(status, 200)
-        self.assertTrue((self.cfg.persona_dir / "atlas.json").exists())
-        self.assertEqual(self.req("DELETE", "/api/personas/atlas")[1], {"deleted": True})
+    def test_agent_create_edit_and_delete(self):
+        status, saved, _ = self.req("POST", "/api/agents", {"name": "Atlas", "face": {"top": "spikes", "eyes": "@"}})
+        self.assertEqual((status, saved["id"]), (200, "atlas"))
+        self.assertTrue((self.cfg.agents_dir / "atlas.json").exists())
+        self.assertEqual(self.req("POST", "/api/agents", {"name": "Atlas"})[1]["id"], "atlas-2")   # no clobbering
+        self.assertEqual(self.req("POST", "/api/agents", {"id": "atlas", "name": "Atlas", "model": "scripted"})[1]["model"],
+                         "scripted")
+        self.assertEqual(self.req("DELETE", "/api/agents/atlas")[1], {"deleted": True})
+        self.assertEqual(self.req("DELETE", "/api/agents/atlas-2")[1], {"deleted": True})
+        _, blue, _ = self.req("POST", "/api/agents", {"id": "blue", "name": "Bluey"})       # edit a built-in = your copy
+        self.assertTrue(blue["stock"] and not blue["builtin"])
+        self.req("DELETE", "/api/agents/blue")                                             # reset to the original
+        self.assertEqual(next(a for a in self.req("GET", "/api/agents")[1] if a["id"] == "blue")["name"], "Blue")
+
+    def test_chat_with_an_agent_and_an_approval(self):
+        (self.cfg.workspace / "demo.txt").write_text("old", encoding="utf-8")   # the demo overwrites it: asks first
+        q = self.app.bus.subscribe(self.app.bus.publish("mark")["id"])
+        status, body, _ = self.req("POST", "/api/chat", {"message": "demo", "agent": "green"})
+        self.assertEqual(status, 202)
+        try:
+            while (e := q.get(timeout=10))["type"] != "approval_request":
+                pass
+        finally:
+            self.app.bus.unsubscribe(q)
+        self.assertEqual((e["tool"], e["agent"]), ("write_file", "green"))
+        self.assertEqual(self.req("POST", "/api/approve", {"request_id": e["request_id"], "allow": True})[1], {"ok": True})
+        self.assertEqual(self.wait_job("chat", body["job_id"])["type"], "job_done")
+        self.assertIn("scripted demo", (self.cfg.workspace / "demo.txt").read_text(encoding="utf-8"))
+        self.assertEqual(self.req("POST", "/api/chat", {"message": "demo", "agent": "nobody"})[0], 400)
+
+    def test_setup_validates_model_name(self):
+        self.assertEqual(self.req("POST", "/api/setup", {"model": "bad name; rm"})[0], 400)
 
     def test_chat_job(self):
         status, body, _ = self.req("POST", "/api/chat", {"message": "demo"})
         self.assertEqual(status, 202)
-        e = self.wait_job("chat")
+        e = self.wait_job("chat", body["job_id"])
         self.assertEqual(e["type"], "job_done")
         self.assertIn("Demo complete", e["result"]["answer"])
 
     def test_council_job_and_busy(self):
-        status, _, _ = self.req("POST", "/api/council", {"question": "Rust or Go?", "personas": ["sage", "vex", "nova"],
-                                                          "protocol": "vote", "options": ["Rust", "Go"]})
-        self.assertEqual(status, 202)
-        e = self.wait_job("council")
+        status, body, _ = self.req("POST", "/api/council", {"question": "Rust or Go?", "agents": ["blue", "green", "orange"],
+                                                             "protocol": "vote", "options": ["Rust", "Go"]})
+        self.assertEqual(status, 202, body)
+        e = self.wait_job("council", body["job_id"])
         self.assertEqual(e["type"], "job_done", e)
         self.assertIn(e["result"]["tally"]["winner"], {"Rust", "Go", None})
         self.assertTrue(Path(e["result"]["transcript"]).exists())
 
     def test_bad_council_requests(self):
-        self.assertEqual(self.req("POST", "/api/council", {"question": "", "personas": ["sage"]})[0], 400)
-        self.assertEqual(self.req("POST", "/api/council", {"question": "q", "personas": ["nobody"]})[0], 400)
-        self.assertEqual(self.req("POST", "/api/council", {"question": "q", "personas": ["sage"], "protocol": "x"})[0], 400)
-
-    def test_guide_served_with_nonce(self):
-        status, body, headers = self.req("GET", f"/guide?token={self.app.token}", token=False)
-        self.assertEqual(status, 200)
-        nonce = headers["Content-Security-Policy"].split("'nonce-")[1].split("'")[0]
-        self.assertIn(f'nonce="{nonce}"'.encode(), body)
+        self.assertEqual(self.req("POST", "/api/council", {"question": "", "agents": ["blue"]})[0], 400)
+        self.assertEqual(self.req("POST", "/api/council", {"question": "q", "agents": ["nobody"]})[0], 400)
+        self.assertEqual(self.req("POST", "/api/council", {"question": "q", "agents": ["blue"], "protocol": "x"})[0], 400)
 
 
 class BrokerTests(unittest.TestCase):
@@ -199,41 +219,5 @@ class BrokerTests(unittest.TestCase):
         self.assertNotIn("AAAA", json.dumps(e))
 
 
-class GuideTests(unittest.TestCase):
-    def test_guide_builds_and_embeds_everything(self):
-        html = build_guide_html()
-        for s in ("Tool explorer", "Profile builder", "Council designer", "Safety centre", "read_file", "Sage"):
-            self.assertIn(s, html)
-        self.assertNotIn("%%", html)
-
-    def test_env_vars_documented(self):
-        root = Path(__file__).resolve().parent.parent
-        keys = {line.split("=")[0].lstrip("# ").strip() for line in (root / ".env.example").read_text(encoding="utf-8").splitlines()
-                if "=" in line and line.lstrip("# ").split("=")[0].strip().isupper()}
-        self.assertEqual(keys - {k for k, _, _ in ENV_VARS}, set())
-
-
 if __name__ == "__main__":
     unittest.main()
-
-
-class FaceFontTests(unittest.TestCase):
-    """Every character a face can contain is in the bundled font, so faces never fall back to another font."""
-
-    def test_font_covers_every_face_character(self):
-        try:
-            from fontTools.ttLib import TTFont
-        except ImportError:
-            self.skipTest("fontTools not installed (pip install fonttools brotli)")
-        from hybrid_agent.personas import load_presets
-        from hybrid_agent.personas.faces import random_face, render_all
-        font = Path(__file__).resolve().parent.parent / "hybrid_agent" / "gui" / "static" / "fonts" / "face-mono.woff2"
-        cmap = TTFont(font).getBestCmap()
-        faces = [p.face for p in load_presets()] + [random_face(str(i)) for i in range(200)]
-        chars = {c for f in faces for frames in render_all(f).values() for fr in frames for c in fr} - {"\n"}
-        self.assertEqual(sorted(c for c in chars if ord(c) not in cmap), [])
-
-    def test_legacy_ascii_faces_are_upgraded(self):
-        from hybrid_agent.personas.faces import normalise_face
-        f = normalise_face({"shape": "round", "eyes": "o", "nose": ">"})
-        self.assertEqual((f["shape"], f["eyes"], f["nose"]), ("frame", "●", "╯"))

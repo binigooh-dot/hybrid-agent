@@ -103,8 +103,8 @@ class Task:
     name: str
     kind: str = "agent"
     prompt: str = ""
-    persona: str = ""                  # agent: optional persona id
-    personas: list = field(default_factory=list)   # council members
+    agent: str = ""                    # kind "agent": which of your agents ("" = default)
+    agents: list = field(default_factory=list)     # kind "council": the members
     protocol: str = "roundtable"
     profile: str = ""                  # tool profile ("" = automatic)
     permission: str = "safe"
@@ -126,13 +126,16 @@ class Task:
             raise ValueError("permission must be 'safe' or 'ask'")
         if self.kind != "diagnose" and not str(self.prompt).strip():
             raise ValueError("give the task a prompt (what should the agents do?)")
-        if self.kind == "council" and not self.personas:
-            raise ValueError("a council task needs at least one persona")
+        if self.kind == "council" and not self.agents:
+            raise ValueError("a council task needs at least one agent")
         self.prompt = str(self.prompt)[:20000]
         self.schedule = validate_schedule(self.schedule)
 
     @classmethod
     def from_dict(cls, d: dict) -> "Task":
+        d = {**d}
+        d.setdefault("agent", d.pop("persona", ""))          # tasks saved by 1.1 (personas) still load
+        d.setdefault("agents", d.pop("personas", []))
         known = set(cls.__dataclass_fields__)
         return cls(**{k: v for k, v in d.items() if k in known})
 

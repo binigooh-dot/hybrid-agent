@@ -1,7 +1,7 @@
-"""[COUNCIL] Groundwork for a council of agents that deliberate together.
+"""[COUNCIL] A council of agents that deliberate together.
 
     blackboard.py  shared, thread-safe board members post findings to
-    roles.py       preset roles (persona + default tool profile)
+    roles.py       the chair (sums up) and members
     member.py      MemberSpec (config) and CouncilMember (live agent)
     ballots.py     parse VOTE/CONFIDENCE lines, weighted/majority tally
     protocols.py   roundtable, debate, vote, critique procedures

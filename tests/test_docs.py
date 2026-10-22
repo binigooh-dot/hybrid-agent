@@ -6,10 +6,9 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-DOCS = [ROOT / "README.md", ROOT / "NOTES.md", ROOT / "RELEASE_NOTES.md", ROOT / ".env.example",
-        *sorted((ROOT / "docs").glob("*.md")), *sorted((ROOT / "personas").glob("*.md")),
-        *sorted((ROOT / "examples").rglob("*.md"))]
-PATHLIKE = re.compile(r"`((?:docs|scripts|hybrid_agent|tests|examples|packaging|personas|\.github)/[^`\s*<>{}]+)`")
+DOCS = [ROOT / "README.md", ROOT / "CHANGELOG.md", ROOT / "RELEASE_NOTES.md", ROOT / ".env.example",
+        *sorted((ROOT / "docs").glob("*.md"))]
+PATHLIKE = re.compile(r"`((?:docs|scripts|hybrid_agent|tests|examples|packaging|\.github)/[^`\s*<>{}]+)`")
 
 
 class DocLinkTests(unittest.TestCase):
@@ -31,12 +30,6 @@ class DocLinkTests(unittest.TestCase):
                     missing.append(f"{d.relative_to(ROOT).as_posix()} -> {target}")
         self.assertEqual(missing, [])
 
-    def test_guide_links_lead_somewhere(self):
-        html = (ROOT / "docs" / "agent_builder_suite.html").read_text(encoding="utf-8")
-        missing = [h for h in re.findall(r'href="([^"#][^"]*)"', html)
-                   if not h.startswith(("http://", "https://", "mailto:", "data:")) and not (ROOT / "docs" / h).exists()]
-        self.assertEqual(missing, [])
-
     def test_download_names_match_this_version(self):
         """README / release notes name the files the build actually produces for this version."""
         from hybrid_agent import __version__
@@ -49,6 +42,22 @@ class DocLinkTests(unittest.TestCase):
         wf = "".join(f.read_text(encoding="utf-8") for f in (ROOT / ".github" / "workflows").glob("*.yml"))
         for path in re.findall(r"python (scripts/[\w./-]+\.py)", wf) + ["RELEASE_NOTES.md", "packaging/HybridAgent.spec"]:
             self.assertTrue((ROOT / path).exists(), path)
+
+    def test_downloads_are_windows_only(self):
+        """The release ships the Windows app only; Linux and macOS run from source."""
+        wf = (ROOT / ".github" / "workflows" / "build.yml").read_text(encoding="utf-8")
+        self.assertEqual(sorted(p.name for p in (ROOT / ".github" / "workflows").glob("*.yml")), ["build.yml"])
+        self.assertIn("windows-x64.zip", wf)
+        self.assertNotRegex(wf, r"\.whl|tar\.gz|HybridAgent-linux|HybridAgent-mac")
+        for doc in ("README.md", "RELEASE_NOTES.md"):
+            self.assertNotRegex((ROOT / doc).read_text(encoding="utf-8"), r"HybridAgent-[\d.]+-(linux|macos)")
+
+    def test_start_here_stays_short(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("build_exe", ROOT / "scripts" / "build_exe.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        self.assertLessEqual(len(mod.START_HERE.strip().splitlines()), 8)
 
 
 class WorkflowTests(unittest.TestCase):

@@ -26,6 +26,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ..agents.store import BUILTIN as BUILTIN_AGENTS
 from ..backends import BackendUnavailable, build_backend_from_spec, build_local_backend
 from ..backends.router import RouterBackend
 from ..core.agent import Agent
@@ -42,12 +43,15 @@ from .roles import get_role
 
 EventHook = Callable[[str, dict], None]
 
-DEFAULT_MEMBERS = [
-    {"name": "chair", "role": "chair"},
-    {"name": "researcher", "role": "researcher"},
-    {"name": "skeptic", "role": "skeptic"},
-    {"name": "engineer", "role": "engineer"},
-]
+
+
+def _agent_specs(agent_ids: list[str], cfg: Config) -> list[MemberSpec]:
+    from ..agents import load_agents
+    available = load_agents(cfg.agents_dir)
+    missing = [a for a in agent_ids if a not in available]
+    if missing:
+        raise ValueError(f"unknown agent(s): {', '.join(missing)}. Available: {', '.join(available)}")
+    return [MemberSpec(name=a, backend=available[a].model) for a in agent_ids]
 
 
 class CouncilError(RuntimeError):
@@ -189,55 +193,38 @@ class Council:
         self.chair = chair or next((s.name for s in specs if s.role == "chair"), specs[0].name)
         if self.chair not in self.specs:
             raise ValueError(f"chair '{self.chair}' is not a member")
+        for s in specs:                          # exactly one chair, who gets the chair's instructions
+            s.role = "chair" if s.name == self.chair else "member"
         # the chair only synthesises, unless they're the only member
         self.participants = [s.name for s in specs if s.name != self.chair] or [self.chair]
         self.members: dict[str, CouncilMember] = {}
         self.defaults: dict[str, Any] = {}       # protocol/rounds/... from a config file
-        self.personas: dict[str, Any] = {}       # member name -> Persona, when built from personas
         self._cancelled = threading.Event()
         self._build_members()
 
     # ------------------------------------------------------------ building
     @classmethod
-    def from_personas(cls, persona_ids: list[str], cfg: Config, **kw) -> "Council":
-        """Build a council from persona ids (presets or files in cfg.persona_dir).
-        The first persona with role 'chair' chairs, unless chair= is given."""
-        from ..personas import load_personas
-        available = load_personas(cfg.persona_dir)
-        missing = [p for p in persona_ids if p not in available]
-        if missing:
-            raise ValueError(f"unknown persona(s): {', '.join(missing)}. Available: {', '.join(available)}")
-        council = cls([available[p].to_member_spec() for p in persona_ids], cfg, **kw)
-        council.personas = {p: available[p] for p in persona_ids}
-        return council
+    def from_agents(cls, agent_ids: list[str], cfg: Config, **kw) -> "Council":
+        """Build a council from your agents (built-in Blue/Green/Orange or files in cfg.agents_dir).
+        The first agent chairs (sums up), unless chair= names another."""
+        kw["chair"] = kw.get("chair") or (agent_ids[0] if agent_ids else None)
+        return cls(_agent_specs(agent_ids, cfg), cfg, **kw)
 
     @classmethod
     def from_config(cls, source: str | Path | dict | None, cfg: Config, **kw) -> "Council":
-        """Build from a JSON file / dict (see examples/council.example.json),
-        or the default 4-member council when source is None.
-
-        The config may list "members" (role-based), "personas" (persona ids),
-        or both - personas join as extra members."""
+        """Build from a JSON file / dict (see examples/council.example.json), or all built-in agents
+        when source is None. A config lists "agents" (ids) and/or "members" (name, backend, tools)."""
         if source is None:
-            data: dict[str, Any] = {"members": DEFAULT_MEMBERS}
+            data: dict[str, Any] = {"agents": [a for a, _ in BUILTIN_AGENTS]}
         elif isinstance(source, dict):
             data = source
         else:
             data = json.loads(Path(source).read_text(encoding="utf-8"))
         specs = [MemberSpec.from_dict(m) for m in data.get("members", [])]
-        personas = {}
-        if data.get("personas"):
-            from ..personas import load_personas
-            available = load_personas(cfg.persona_dir)
-            for pid in data["personas"]:
-                if pid not in available:
-                    raise ValueError(f"unknown persona '{pid}'. Available: {', '.join(available)}")
-                personas[pid] = available[pid]
-                specs.append(available[pid].to_member_spec())
+        specs += _agent_specs(list(data.get("agents", [])), cfg)
         kw.setdefault("chair", data.get("chair"))
         kw.setdefault("workers", data.get("workers"))
         council = cls(specs, cfg, **kw)
-        council.personas = personas
         council.defaults = {k: data[k] for k in ("protocol", "rounds", "tally_mode", "options") if k in data}
         return council
 

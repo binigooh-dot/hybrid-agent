@@ -2,8 +2,7 @@
 
 A MemberSpec is plain data - easy to write in a JSON config:
 
-    {"name": "skeptic", "role": "skeptic", "backend": "local:llama3.1:8b",
-     "tools": "readonly,+web_search", "weight": 1.0}
+    {"name": "green", "backend": "local:llama3.1:8b", "tools": "readonly,+web_search"}
 
 backend strings:
     "default"            whatever the main agent uses (AGENT_BACKEND)
@@ -24,9 +23,9 @@ from ..core.agent import Agent
 from .roles import get_role
 
 MEMBER_SYSTEM_PROMPT = """\
-{persona}
+{instructions}
 
-You are "{name}", the {title} on a council of AI agents that deliberates on
+You are "{name}", the {title} of a council of AI agents that deliberates on
 questions together. Other members: {others}.
 
 How the council works:
@@ -41,27 +40,26 @@ How the council works:
 @dataclass
 class MemberSpec:
     name: str
-    role: str = "generalist"
+    role: str = "member"            # "chair" or "member"
     backend: Any = "default"        # str spec or Backend instance (see module docstring)
     tools: str | None = None        # profile string; default = the role's profile
-    persona: str | None = None      # overrides the role's persona text
     weight: float = 1.0             # vote weight
     max_steps: int | None = None    # tool-use steps per contribution
 
     @classmethod
     def from_dict(cls, d: dict) -> "MemberSpec":
-        unknown = set(d) - set(cls.__dataclass_fields__)
+        unknown = set(d) - set(cls.__dataclass_fields__) - {"persona"}
         if unknown:
             raise ValueError(f"unknown member field(s): {', '.join(sorted(unknown))}")
         if "name" not in d:
             raise ValueError("every council member needs a 'name'")
-        get_role(d.get("role", "generalist"))  # validate early
+        d = {k: v for k, v in d.items() if k != "persona"}       # pre-1.2 configs
         return cls(**d)
 
     def system_prompt(self, others: list[str]) -> str:
         role = get_role(self.role)
         return MEMBER_SYSTEM_PROMPT.format(
-            persona=self.persona or role.persona, name=self.name, title=role.title,
+            instructions=role.instructions, name=self.name, title=role.title,
             others=", ".join(others) or "none", os=platform.system())
 
     def tool_profile(self) -> str:

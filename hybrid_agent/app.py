@@ -3,10 +3,11 @@
     1. find / create the portable home folder (core/home.py) and load its settings
     2. if the app is already running, just reopen the browser - no second copy
     3. start the local model engine from the home folder, if installed (in the background)
-    4. start Agent Studio (GUI + control panel + task scheduler) and open the browser
+    4. start the app (GUI + task scheduler) and open it in its own window
 
-Closing the window (or Quit in the Control panel) stops the GUI, the scheduler and
-the engine it started. Your files, tasks and models stay in the home folder.
+First run: the app offers one-click setup (engine + a model sized for this computer).
+Closing this window (or Quit in Settings) stops the app, the scheduler and the
+engine it started. Your files, tasks and models stay in the home folder.
 """
 from __future__ import annotations
 
@@ -14,16 +15,25 @@ import argparse
 import sys
 import threading
 import urllib.request
-import webbrowser
 from pathlib import Path
 
 BANNER = r"""
-   ╭───────────────╮
-   │  ●         ●  │   Hybrid Agent Studio
-   │       ▾       │   local agents · council · tasks
-   │    ╰─────╯    │
-   ╰───────────────╯
+     .-----.
+    /       \     Hybrid Agent
+   |  o   o  |    your own AI helpers, on your computer
+   |  \___/  |
+    \       /
+     '-----'
 """
+
+
+def _console_title() -> None:
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.kernel32.SetConsoleTitleW("Hybrid Agent - keep this window open")  # type: ignore[attr-defined]
+        except (AttributeError, OSError):
+            pass
 
 
 def _already_running(url_file: Path) -> str | None:
@@ -45,19 +55,18 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-browser", action="store_true")
     ap.add_argument("--no-engine", action="store_true", help="don't start the local model engine")
     args = ap.parse_args(argv)
-    try:                                   # box-drawing banner; plain consoles fall back gracefully
-        print(BANNER)
-    except UnicodeEncodeError:
-        print("\n  Hybrid Agent Studio\n")
+    _console_title()
+    print(BANNER)
 
     from .core.home import apply_home, find_home
     home = apply_home(args.home or find_home() or Path.home() / "HybridAgent" / "home")
     url_file = home / "runtime" / "studio.url"
     existing = _already_running(url_file)
     if existing:
-        print("  Already running - opening it in your browser.")
+        print("  Already running - opening it.")
         if not args.no_browser:
-            webbrowser.open(existing)
+            from .gui.server import open_window
+            open_window(existing)
         return 0
 
     from .core.config import Config
@@ -67,10 +76,11 @@ def main(argv: list[str] | None = None) -> int:
         cfg.validate()
         cfg.workspace = validate_workspace(cfg.workspace)
     except ValueError as e:
-        print(f"  Settings problem: {e}\n  Fix it in {home / 'settings.env'}", file=sys.stderr)
+        print(f"  Settings problem: {e}\n  Fix it in {home / 'settings.env'} (or delete that file to start fresh)",
+              file=sys.stderr)
         return 2
     cfg.workspace.mkdir(parents=True, exist_ok=True)
-    print(f"  Home folder: {home}")
+    print(f"  Your files: {home}")
 
     from .runtime import OllamaRuntime
     rt = OllamaRuntime(home, cfg.log_dir)
@@ -83,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"  Model engine: {e}")
             threading.Thread(target=start_engine, daemon=True).start()
         elif not rt.binary():
-            print("  Model engine: not installed yet - use the Control panel to install it.")
+            print("  Model engine: not installed yet - the app will offer one-click setup.")
 
     from .gui.server import serve
     return serve(cfg, port=args.port, open_browser=not args.no_browser, url_file=url_file, runtime=rt)

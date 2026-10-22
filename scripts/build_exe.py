@@ -2,13 +2,13 @@
 
     pip install pyinstaller
     python scripts/build_exe.py                     # build for this computer
-    python scripts/build_exe.py --wine C:/path/python.exe   # Linux -> Windows, via Wine (see docs/08)
+    python scripts/build_exe.py --wine C:/path/python.exe   # Linux -> Windows, via Wine (docs/DEVELOPING.md)
 
 Output (dist/):
     HybridAgent/                       the app folder - copy it anywhere, double-click HybridAgent(.exe)
       HybridAgent(.exe)  _internal/    the program (read-only to the agents)
       MANIFEST.sha256                  integrity manifest of every program file
-      START HERE.txt                   first-run instructions
+      START HERE.txt                   five lines: how to start
     HybridAgent-<version>-<os>.zip     the same folder, zipped, + SHA256SUMS
 
 The home/ folder (your settings, files, tasks, models) is created next to the program on first run.
@@ -32,24 +32,12 @@ from hybrid_agent import __version__
 from hybrid_agent.security.audit import write_manifest
 
 START_HERE = """Hybrid Agent {version}
-====================
 
-1. Double-click {exe}. A console window shows the link and your browser opens Agent Studio.
-   (Closing that window stops the app.)
-2. Open the Control tab:
-     - "Install engine" downloads the local model engine (Ollama) into this folder
-     - pick a model and press Download (qwen2.5:7b is a good start; qwen2.5:1.5b for older PCs)
-     - "Run check" confirms the agents can reach Wikipedia and the web from this computer
-3. Use Council, Chat, or schedule work in Tasks.
-
-Everything lives in this folder: home\\workspace (the agents' files), home\\models, home\\tasks,
-home\\settings.env. Move or back up the whole folder and nothing is lost.
-
-Safety: agents can only change files inside home\\workspace; risky actions ask you first;
-unattended tasks are read-only by default. Details: Safety tab, or docs/07 in the project.
-
-Windows SmartScreen may warn the first time because the app isn't code-signed: choose
-"More info" -> "Run anyway" if you trust where you got it. Verify the download against SHA256SUMS.
+1. Double-click {exe}. Keep the small black window open while you use the app.
+2. Press "Set up now". It downloads the AI engine and a model that fits this PC (once).
+3. Chat, ask the Council, or schedule Tasks. Everything is saved in the "home" folder here.
+Safe by default: agents only change files in home\\workspace and ask before anything risky.
+Windows warning "unrecognized app"? Click More info, then Run anyway.
 """
 
 
@@ -64,7 +52,7 @@ def version_file(path: Path) -> None:
   ffi=FixedFileInfo(filevers={nums}, prodvers={nums}, mask=0x3f, flags=0x0, OS=0x40004, fileType=0x1,
                     subtype=0x0, date=(0, 0)),
   kids=[StringFileInfo([StringTable('040904B0', [
-    StringStruct('CompanyName', 'Hybrid Agent'), StringStruct('FileDescription', 'Hybrid Agent Studio'),
+    StringStruct('CompanyName', 'Hybrid Agent'), StringStruct('FileDescription', 'Hybrid Agent'),
     StringStruct('FileVersion', '{__version__}'), StringStruct('InternalName', 'HybridAgent'),
     StringStruct('OriginalFilename', 'HybridAgent.exe'), StringStruct('ProductName', 'Hybrid Agent'),
     StringStruct('ProductVersion', '{__version__}')])]), VarFileInfo([VarStruct('Translation', [1033, 1200])])])

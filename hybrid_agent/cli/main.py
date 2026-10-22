@@ -161,8 +161,8 @@ def run_council(cfg: Config, args) -> int:
         return 2
     kw = dict(on_event=None if args.quiet else print_event,
               approver=make_approver(cfg.auto_approve), ask_user=ask_user)
-    if args.personas:
-        council = Council.from_personas([p.strip() for p in args.personas.split(",") if p.strip()], cfg, **kw)
+    if args.agents:
+        council = Council.from_agents([a.strip() for a in args.agents.split(",") if a.strip()], cfg, **kw)
     else:
         council = Council.from_config(cfg.council_config, cfg, **kw)
     print(f"{BOLD}Council{RESET}\n{council.describe()}\n")
@@ -208,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
     council.add_argument("--options", help="comma-separated options to vote on")
     council.add_argument("--council-config", type=Path, help="JSON file describing the members")
     council.add_argument("--workers", type=int, help="members answering in parallel")
-    council.add_argument("--personas", help="comma-separated persona ids, e.g. sage,vex,nova")
+    council.add_argument("--agents", help="comma-separated agent ids, e.g. blue,green,orange (the first chairs)")
     args = ap.parse_args(argv)
 
     logging.basicConfig(level=logging.DEBUG if args.debug else logging.WARNING,

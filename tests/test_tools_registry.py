@@ -107,13 +107,6 @@ class ProfileTests(unittest.TestCase):
 class DocsTests(unittest.TestCase):
     ROOT = Path(__file__).resolve().parent.parent
 
-    def _load(self, script):
-        import importlib.util
-        spec = importlib.util.spec_from_file_location(script, self.ROOT / "scripts" / f"{script}.py")
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        return mod
-
     def test_every_python_file_is_labelled(self):
         import ast
         unlabelled = []
@@ -124,14 +117,6 @@ class DocsTests(unittest.TestCase):
             if not doc.startswith("["):
                 unlabelled.append(str(f.relative_to(self.ROOT)))
         self.assertEqual(unlabelled, [], "start each module docstring with a [LAYER / name] label")
-
-    def test_file_map_is_up_to_date(self):
-        self.assertEqual((self.ROOT / "docs" / "FILE_MAP.md").read_text(encoding="utf-8"), self._load("gen_file_map").build(),
-                         "docs/FILE_MAP.md is stale - run: python scripts/gen_file_map.py")
-
-    def test_tool_reference_is_up_to_date(self):
-        self.assertEqual((self.ROOT / "docs" / "04_TOOLS.md").read_text(encoding="utf-8"), self._load("gen_tool_docs").build(),
-                         "docs/04_TOOLS.md is stale - run: python scripts/gen_tool_docs.py")
 
 
 if __name__ == "__main__":

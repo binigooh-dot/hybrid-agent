@@ -49,12 +49,13 @@ def check_local_model(cfg: Config) -> list[Row]:
             models = [m["id"] for m in _get_json(cfg.local_base_url.rstrip("/") + "/v1/models").get("data", [])]
     except Exception as e:  # noqa: BLE001 - deliberate boundary: report the failure, never crash
         from ..core.home import home_dir
-        hint = (" - open Agent Studio's Control tab and press Install engine / Start" if home_dir()
+        hint = (" - press Set up now in the app (or Settings > Model engine > Start)" if home_dir()
                 else " - install Ollama and run `ollama serve`") if cfg.local_provider == "ollama" else ""
         return [(FAIL, server, f"{cfg.local_base_url}: {e}{hint}", True), (FAIL, model, "skipped (server down)", True)]
     have = model_available(cfg.local_model, models)
     detail = "available" if have else \
-        f"not found; run `ollama pull {cfg.local_model}` (have: {', '.join(models) or 'none'})"
+        f"not downloaded yet - press Set up now in the app, or run `ollama pull {cfg.local_model}` " \
+        f"(have: {', '.join(models) or 'none'})"
     return [(OK, server, cfg.local_base_url, True), (OK if have else FAIL, model, detail, True)]
 
 
@@ -88,20 +89,16 @@ def check_optional_tools(cfg: Config) -> list[Row]:
     return rows
 
 
-def check_personas_and_council(cfg: Config) -> list[Row]:
-    rows: list[Row] = []
-    try:
-        from ..personas import load_personas
-        personas = load_personas(cfg.persona_dir)
-        rows.append((OK, "Personas load (optional)", f"{len(personas)}: {', '.join(personas)}", False))
-    except ValueError as e:
-        rows.append((WARN, "Personas load (optional)", str(e), False))
+def check_agents_and_council(cfg: Config) -> list[Row]:
+    from ..agents import load_agents
+    agents = load_agents(cfg.agents_dir)
+    rows: list[Row] = [(OK, "Agents (optional)", f"{len(agents)}: {', '.join(agents)}", False)]
     if cfg.council_config:
         try:
             from ..council import MemberSpec
             data = json.loads(cfg.council_config.read_text(encoding="utf-8"))
             specs = [MemberSpec.from_dict(m) for m in data.get("members", [])]
-            n = len(specs) + len(data.get("personas", []))
+            n = len(specs) + len(data.get("agents", []))
             rows.append((OK, "Council config (optional)", f"{cfg.council_config}: {n} members", False))
         except Exception as e:  # noqa: BLE001 - deliberate boundary: report the failure, never crash
             rows.append((WARN, "Council config (optional)", f"{cfg.council_config}: {e}", False))
@@ -119,7 +116,7 @@ def check_search(cfg: Config) -> list[Row]:
 
 
 CHECKS = [check_python, check_local_model, check_workspace, check_optional_tools,
-          check_personas_and_council, check_search]
+          check_agents_and_council, check_search]
 
 
 def run_checks(cfg: Config) -> list[Row]:

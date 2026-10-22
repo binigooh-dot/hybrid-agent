@@ -155,7 +155,7 @@ class JobManager:
                 final = ("job_cancelled", {})
             except BackendUnavailable as e:
                 final = ("job_error", {"error": f"Model unavailable: {e}",
-                                       "hint": "Run the Safety tab's doctor check."})
+                                       "hint": "Settings > Check setup shows what's missing."})
             except Exception as e:  # noqa: BLE001 - deliberate boundary: report every failure to the GUI
                 final = ("job_error", {"error": f"{type(e).__name__}: {e}", "trace": traceback.format_exc(limit=4)})
             # Mark idle BEFORE announcing the end, so a client reacting instantly

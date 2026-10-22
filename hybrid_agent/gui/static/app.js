@@ -1,14 +1,13 @@
-// [GUI / app] Agent Studio front-end. Plain JavaScript, no libraries, works offline.
+// [GUI / app] Hybrid Agent front-end. Plain JavaScript, no libraries, works offline.
 // Security rule: everything is written with textContent - never innerHTML - including the ASCII faces.
 "use strict";
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const TOKEN = new URLSearchParams(location.search).get("token") || "";
-const S = { meta: null, personas: {}, tools: [], picked: [], chair: "", protocol: "debate", job: null, stage: {},
-            chatPersona: "", turn: null, modalId: null, editing: null, editorExpr: "speaking", draftFace: {},
-            tasks: { tasks: [], runs: [], scheduler: {}, running: null }, taskEdit: null, taskKind: "agent", control: null,
-            safetyLevel: "", runningTask: "" };
+const S = { meta: null, agents: {}, picked: [], protocol: "roundtable", job: null, stage: {}, chatAgent: "", turn: null,
+            modalId: null, editing: null, editorExpr: "neutral", draft: {}, tasks: { tasks: [], runs: [], scheduler: {} },
+            taskEdit: null, taskKind: "agent", control: null, safetyLevel: "", runningTask: "" };
 const REDUCED = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 // ------------------------------------------------------------------ helpers
@@ -36,13 +35,15 @@ async function api(method, path, body) {
   if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
   return data;
 }
-const nameOf = (id) => S.personas[id]?.name || id;
-const colorOf = (id) => S.personas[id]?.face?.color || "";
-const short = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+const nameOf = (id) => S.agents[id]?.name || id;
+const colorOf = (id) => S.agents[id]?.face?.color || "";
+const short = (s, n) => (s.length > n ? s.slice(0, n - 3) + "..." : s);
+const gb = (b) => (b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.round(b / 1e6)} MB`);
+const firstAgent = () => Object.values(S.agents)[0];
 
 // ================================================================== ASCII FACES
 // A face is a <pre> holding one text frame. One shared ticker animates every face on screen:
-// talking/thinking cycle their frames, idle faces blink now and then. ~0 CPU, no images.
+// talking/thinking cycle their frames, idle faces blink now and then. Almost no CPU, no images.
 const live = new Set();
 function face(faces, expr = "neutral", size = "", color = "") {
   const pre = el("pre", { class: `ascii ${size}`, "aria-hidden": "true" });
@@ -58,17 +59,11 @@ function setExpr(pre, expr, ms = 0, after = "neutral") {
   f.blinkAt = Date.now() + 1500 + Math.random() * 4000;
   pre.textContent = f.faces[f.expr][0];
 }
-function personaFace(id, expr, size) {
-  const p = S.personas[id];
-  return p ? face(p.faces, expr, size, p.face.color) : el("pre", { class: `ascii ${size}`, text: "\n\n   ( ? )\n\n" });
+function agentFace(id, expr, size) {
+  const a = S.agents[id] || firstAgent();
+  return a ? face(a.faces, expr, size, a.face.color) : el("pre", { class: `ascii ${size}`, text: "\n\n    (o_o)\n\n" });
 }
-// The model engine gets a little face too (a server box): it thinks while downloading.
-const FACE_ENGINE = { neutral: ["  ▄▄▄▄▄▄▄▄▄▄▄   \n  ┌─────────┐   \n  │ ▪ ▪ ▪ ▪ │   \n  ├─────────┤   \n  │ ●  ───  │   \n  ├─────────┤   \n  └─────────┘   "] };
-FACE_ENGINE.happy = [FACE_ENGINE.neutral[0].replace("●", "◉")];
-FACE_ENGINE.concerned = [FACE_ENGINE.neutral[0].replace("●", "○").replace("▪ ▪ ▪ ▪", "      ")];
-FACE_ENGINE.thinking = ["▪ ▪ ▪ ▪", "▪▪ ▪ ▪ ", "▪ ▪▪ ▪ ", "▪ ▪ ▪▪ "].map((l) => FACE_ENGINE.neutral[0].replace("▪ ▪ ▪ ▪", l).replace("●", "◉"));
-FACE_ENGINE.blink = FACE_ENGINE.neutral;
-function idleExpr(id) { return S.personas[id]?.role === "skeptic" ? "skeptical" : "neutral"; }
+function swapFace(sel, pre) { pre.id = $(sel).id; $(sel).replaceWith(pre); return pre; }
 setInterval(() => {
   const now = Date.now();
   for (const pre of live) {
@@ -83,15 +78,14 @@ setInterval(() => {
       f.blinkAt = now + 2500 + Math.random() * 4500;
     }
   }
-}, 230);
+}, 240);
 
 // ------------------------------------------------------------------ tabs + theme
 function showTab(name) {
   $$(".tabs button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === name)));
   $$(".tab").forEach((s) => s.classList.toggle("active", s.id === `tab-${name}`));
-  if (name === "safety") loadSafety();
+  if (name === "settings") { loadSafety(); loadControl(); }
   if (name === "tasks") loadTasks();
-  if (name === "control") loadControl();
   try { sessionStorage.setItem("tab", name); } catch { /* storage may be blocked */ }
 }
 $$(".tabs button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
@@ -106,47 +100,91 @@ try { const t = localStorage.getItem("theme"); if (t) document.documentElement.d
 function setBusy(job) {
   S.job = job;
   $("#busy").classList.toggle("hidden", !job);
-  if (job) $("#busy-label").textContent = { council: "Council deliberating…", chat: "Agent working…", diagnose: "Running drills…",
-    task: "Running a task…" }[job.kind] || "Working…";
+  if (job) $("#busy-label").textContent = { council: "Council deciding...", chat: "Agent working...", diagnose: "Running drills...",
+    task: "Running a task..." }[job.kind] || "Working...";
   for (const b of ["#c-run", "#s-run", "#chat-form button"]) $(b).disabled = !!job;
 }
 $("#stop").addEventListener("click", async () => {
-  try { await api("POST", "/api/stop", {}); toast("Stopping at the next safe point…"); } catch (e) { toast(e.message); }
+  try { await api("POST", "/api/stop", {}); toast("Stopping at the next safe point..."); } catch (e) { toast(e.message); }
+});
+
+// ================================================================== CHAT
+const SUGGEST = ["What's on Wikipedia's front page today?", "What files are in my workspace?", "What's 17% of 2,340?",
+  "Write a short poem about Mondays and save it as poem.txt"];
+function chatMsg(who, text, err = false) {
+  const row = who === "user" ? el("div", { class: "msg user" }, el("div", { class: "av", text: "you" }), el("div", { class: "txt", text }))
+    : el("div", { class: "msg agent" }, el("div", { class: "av" }, agentFace(S.chatAgent, "talking", "xs")),
+      el("div", { class: `txt${err ? " err" : ""}`, text }));
+  const pre = row.querySelector("pre"); if (pre) setExpr(pre, err ? "unsure" : "talking", Math.min(6000, 1200 + text.length * 15));
+  $("#chat-log").append(row); $("#chat-log").scrollTop = 1e9; renderSuggest(); return row;
+}
+function renderSuggest() {
+  const box = $("#chat-suggest"); box.replaceChildren();
+  if ($("#chat-log").querySelector(".msg.user")) return;
+  for (const s of SUGGEST) box.append(el("button", { class: "chip", type: "button", text: s, onclick: () => { $("#chat-input").value = s; $("#chat-input").focus(); } }));
+}
+function startTurn() {   // a "thinking" bubble + a folded list of the tools the agent uses this turn
+  const row = el("div", { class: "msg agent" }, el("div", { class: "av" }, agentFace(S.chatAgent, "thinking", "xs")),
+    el("div", { class: "txt muted", text: "thinking..." }));
+  const list = el("ol"), sum = el("summary", { text: "used 0 tools" });
+  const det = el("details", { class: "tools-used hidden" }, sum, list);
+  $("#chat-log").append(row, det); $("#chat-log").scrollTop = 1e9;
+  S.turn = { row, det, list, sum, n: 0 };
+}
+function turnTool(kind, d) {
+  const t = S.turn; if (!t) return;
+  if (kind === "tool_call") {
+    t.n++; t.det.classList.remove("hidden"); t.sum.textContent = `used ${t.n} tool${t.n > 1 ? "s" : ""}`;
+    t.list.append(el("li", { text: `${d.name}(${short(JSON.stringify(d.arguments), 140)})` }));
+    t.row.querySelector(".txt").textContent = `using ${d.name}...`;
+  } else if (kind === "tool_result" && t.list.lastChild) {
+    t.list.lastChild.append(el("div", { class: "muted", text: `-> ${short((d.preview || "").split("\n")[0], 160)}` }));
+    if (d.is_error) t.list.lastChild.classList.add("err");
+  }
+}
+function endTurn(text, err = false) {
+  const t = S.turn; S.turn = null;
+  if (t) t.row.remove();
+  const row = chatMsg("agent", text, err);
+  if (t && t.n) row.after(t.det);
+}
+$("#chat-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const text = $("#chat-input").value.trim(); if (!text) return;
+  chatMsg("user", text); $("#chat-input").value = "";
+  startTurn();   // before the request: a quick reply can arrive before the POST returns
+  try { await api("POST", "/api/chat", { message: text, agent: S.chatAgent }); } catch (e) { endTurn(e.message, true); }
+});
+$("#chat-input").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); $("#chat-form").requestSubmit(); }
+});
+$("#chat-agent").addEventListener("change", () => { S.chatAgent = $("#chat-agent").value; swapFace("#chat-face", agentFace(S.chatAgent, "happy", "xs")); });
+$("#chat-reset").addEventListener("click", async () => {
+  await api("POST", "/api/chat/reset", {}).catch((e) => toast(e.message)); $("#chat-log").replaceChildren(); renderSuggest();
 });
 
 // ================================================================== COUNCIL
 const PROTOCOLS = {
-  roundtable: ["🔄 Roundtable", "Everyone shares a view, the chair sums up"],
-  debate: ["⚔️ Debate", "Members answer, then rebut each other"],
-  vote: ["🗳️ Vote", "Weighted vote on options, majority wins"],
-  critique: ["✍️ Critique", "One drafts, others review, draft improves"],
+  roundtable: ["Roundtable", "Everyone shares a view, the chair sums up"],
+  debate: ["Debate", "Answer, then rebut each other"],
+  vote: ["Vote", "Vote on options, majority wins"],
+  critique: ["Critique", "One drafts, the others improve it"],
 };
-const EXAMPLES = ["Should I learn Rust or Go first?", "Is it worth running my own local LLM?", "Best way to back up family photos?"];
+const EXAMPLES = ["Should I learn Rust or Go first?", "Best way to back up family photos?", "Is a 4-day work week a good idea?"];
 const CALLS = { roundtable: (n) => n + 1, debate: (n, r) => n * r + 1, vote: (n) => n + 2, critique: (n, r) => 1 + r * Math.max(n - 1, 0) + r };
 
-function chairOf() { return S.picked.includes(S.chair) ? S.chair : S.picked.find((id) => S.personas[id]?.role === "chair") || S.picked[0] || ""; }
 function renderPicker() {
-  const box = $("#c-personas"); box.replaceChildren();
-  const chair = chairOf();
-  for (const p of Object.values(S.personas)) {
-    const on = S.picked.includes(p.id);
-    const b = el("button", { class: "pick", type: "button", "aria-pressed": String(on), title: p.personality, style: `--face:${p.face.color}` },
-      on && p.id === chair ? el("span", { class: "star", text: "★", title: "chair" }) : null,
-      personaFace(p.id, on ? "happy" : "neutral", "xs"), el("div", { class: "nm", text: p.name }), el("div", { class: "rl", text: p.title }));
-    b.addEventListener("click", () => {
-      S.picked = on ? S.picked.filter((x) => x !== p.id) : [...S.picked, p.id];
-      renderPicker();
-    });
+  const box = $("#c-agents"); box.replaceChildren();
+  for (const a of Object.values(S.agents)) {
+    const on = S.picked.includes(a.id);
+    const b = el("button", { class: "pick", type: "button", "aria-pressed": String(on), style: `--face:${a.face.color}` },
+      on && a.id === S.picked[0] ? el("span", { class: "star", text: "*", title: "chair" }) : null,
+      agentFace(a.id, on ? "happy" : "neutral", "xs"), el("div", { class: "nm", text: a.name }));
+    b.addEventListener("click", () => { S.picked = on ? S.picked.filter((x) => x !== a.id) : [...S.picked, a.id]; renderPicker(); });
     box.append(b);
   }
   councilEstimate();
 }
-$("#c-chair-next").addEventListener("click", (ev) => {
-  ev.preventDefault();
-  if (S.picked.length < 2) return toast("Pick at least two members first.");
-  S.chair = S.picked[(S.picked.indexOf(chairOf()) + 1) % S.picked.length];
-  renderPicker(); toast(`${nameOf(S.chair)} will chair.`);
-});
 function renderProtocols() {
   const box = $("#c-protocols"); box.replaceChildren();
   for (const [k, [label, blurb]] of Object.entries(PROTOCOLS)) {
@@ -163,17 +201,17 @@ function councilEstimate() {
   const n = Math.max(S.picked.length - 1, 1), r = +$("#c-rounds").value || 1;
   $("#c-rounds-out").textContent = r;
   $("#c-estimate").textContent = S.picked.length
-    ? `${S.picked.length} member${S.picked.length > 1 ? "s" : ""} · about ${CALLS[S.protocol](n, r)} model replies` : "Pick at least one member.";
+    ? `${S.picked.length} agent${S.picked.length > 1 ? "s" : ""}, about ${CALLS[S.protocol](n, r)} model replies` : "Pick at least one agent.";
 }
 $("#c-rounds").addEventListener("input", councilEstimate);
 for (const q of EXAMPLES) $("#c-examples").append(el("button", { class: "chip", type: "button", text: q, onclick: () => { $("#c-question").value = q; } }));
 $("#c-run").addEventListener("click", async () => {
   const question = $("#c-question").value.trim();
   if (!question) { $("#c-question").focus(); return toast("Write a question first (step 1)."); }
-  if (!S.picked.length) return toast("Pick at least one member (step 2).");
+  if (!S.picked.length) return toast("Pick at least one agent (step 2).");
   const options = $("#c-options").value.split(",").map((s) => s.trim()).filter(Boolean);
   try {
-    await api("POST", "/api/council", { question, personas: S.picked, chair: chairOf(), protocol: S.protocol,
+    await api("POST", "/api/council", { question, agents: S.picked, chair: S.picked[0], protocol: S.protocol,
       rounds: +$("#c-rounds").value || 2, options: S.protocol === "vote" ? options : [] });
   } catch (e) { toast(e.message); }
 });
@@ -181,13 +219,12 @@ $("#c-run").addEventListener("click", async () => {
 function buildStage(members, chair, question) {
   const stage = $("#stage"); stage.replaceChildren(); S.stage = {};
   $("#c-final").classList.add("hidden");
-  $("#c-feed").replaceChildren(el("div", { class: "sys", text: `“${question}”` }));
+  $("#c-feed").replaceChildren(el("div", { class: "sys", text: `"${question}"` }));
   for (const id of members) {
-    const p = S.personas[id] || { name: id, title: "" };
-    const pre = personaFace(id, idleExpr(id), "");
+    const pre = agentFace(id, "neutral", "");
     const card = el("div", { class: "member", style: `--face:${colorOf(id) || "var(--accent)"}` },
-      id === chair ? el("span", { class: "badge", text: "★ chair" }) : null,
-      el("div", { class: "face-box" }, pre), el("div", { class: "name", text: p.name }), el("div", { class: "title", text: p.title }),
+      id === chair ? el("span", { class: "badge", text: "* chair" }) : null,
+      el("div", { class: "face-box" }, pre), el("div", { class: "name", text: nameOf(id) }),
       el("div", { class: "state", text: "listening" }), el("div", { class: "vote" }));
     stage.append(card);
     S.stage[id] = { card, pre, state: card.querySelector(".state"), vote: card.querySelector(".vote"), last: "" };
@@ -200,7 +237,7 @@ function feedSay(id, kind, text) {
   const t = el("div", { class: "txt", text, style: `--face:${colorOf(id) || "var(--accent)"}` });
   if (text.length > 600) { t.classList.add("clip"); t.addEventListener("click", () => t.classList.remove("clip"), { once: true }); }
   const f = $("#c-feed");
-  f.append(el("div", { class: "say" }, el("div", { class: "face-box" }, personaFace(id, "neutral", "xs")),
+  f.append(el("div", { class: "say" }, el("div", { class: "face-box" }, agentFace(id, "neutral", "xs")),
     el("div", {}, el("div", { class: "who", text: nameOf(id) }, el("small", { text: kind })), t)));
   f.scrollTop = f.scrollHeight;
 }
@@ -211,31 +248,31 @@ function voteOf(text) {
 function onCouncilEvent(e) {
   const m = S.stage[e.member];
   switch (e.event) {
-    case "round_start": $("#c-round").textContent = `Round ${e.round} · ${e.kind}`; feedSys(`— Round ${e.round}: ${e.kind} —`); break;
+    case "round_start": $("#c-round").textContent = `Round ${e.round}: ${e.kind}`; feedSys(`-- Round ${e.round}: ${e.kind} --`); break;
     case "member_start":
       if (!m) break;
-      m.card.classList.add("active"); m.state.textContent = `thinking (${e.kind})…`; setExpr(m.pre, "thinking"); break;
+      m.card.classList.add("active"); m.state.textContent = `thinking (${e.kind})...`; setExpr(m.pre, "thinking"); break;
     case "member_done": {
       if (!m) break;
       m.card.classList.remove("active");
-      if (e.error) { m.card.classList.add("error"); m.state.textContent = "unavailable"; setExpr(m.pre, "concerned"); feedSys(`${nameOf(e.member)}: ${e.error}`, true); break; }
+      if (e.error) { m.card.classList.add("error"); m.state.textContent = "unavailable"; setExpr(m.pre, "unsure"); feedSys(`${nameOf(e.member)}: ${e.error}`, true); break; }
       m.last = e.content || e.preview || "";
       const v = voteOf(m.last); m.vote.textContent = v ? `votes ${v}` : "";
-      m.state.textContent = `${e.kind} · ${e.seconds.toFixed(1)}s`;
-      setExpr(m.pre, "speaking", Math.min(8000, 1500 + m.last.length * 20), idleExpr(e.member));
+      m.state.textContent = `${e.kind}, ${e.seconds.toFixed(1)}s`;
+      setExpr(m.pre, "talking", Math.min(8000, 1500 + m.last.length * 20));
       feedSay(e.member, e.kind, m.last);
       break;
     }
-    case "consensus": feedSys(`Consensus on “${e.winner}” — finishing early.`); for (const x of Object.values(S.stage)) setExpr(x.pre, "happy"); break;
-    case "options": feedSys(`Options on the table: ${e.options.join(" · ")}`); break;
-    case "chair_failed": feedSys("The chair couldn't sum up; showing members' positions.", true); break;
+    case "consensus": feedSys(`Agreed on "${e.winner}", finishing early.`); for (const x of Object.values(S.stage)) setExpr(x.pre, "happy"); break;
+    case "options": feedSys(`Options: ${e.options.join(" / ")}`); break;
+    case "chair_failed": feedSys("The chair couldn't sum up; showing everyone's positions.", true); break;
   }
 }
 function onCouncilDone(res) {
   const box = $("#c-final"); box.classList.remove("hidden");
   const winner = res.tally?.winner;
   box.replaceChildren(el("div", { class: "feed-head" }, el("h2", { text: winner ? `Decision: ${winner}` : "Council answer" }),
-    el("span", { class: "pill", text: `${res.protocol} · ${res.seconds.toFixed(1)}s` })));
+    el("span", { class: "pill", text: `${res.protocol}, ${res.seconds.toFixed(1)}s` })));
   if (res.tally) {
     const bars = el("div", { class: "bars" }), max = Math.max(...Object.values(res.tally.scores), 0.0001);
     for (const [opt, sc] of Object.entries(res.tally.scores).sort((a, b) => b[1] - a[1])) {
@@ -246,124 +283,65 @@ function onCouncilDone(res) {
     box.append(bars, el("div", { class: "hint", text: res.tally.summary }));
   }
   box.append(el("div", { class: "answer", text: res.final_answer }), el("p", { class: "hint", text: `Transcript saved: ${res.transcript}` }));
-  for (const [id, x] of Object.entries(S.stage)) {
+  for (const x of Object.values(S.stage)) {
     const v = voteOf(x.last).toLowerCase();
     const agree = !winner || !v || v.startsWith(winner.toLowerCase());
-    setExpr(x.pre, x.card.classList.contains("error") || !agree ? "concerned" : "happy", 6000, idleExpr(id));
+    setExpr(x.pre, x.card.classList.contains("error") || !agree ? "unsure" : "happy", 6000);
   }
   $("#c-round").textContent = "finished";
   box.scrollIntoView({ behavior: REDUCED ? "auto" : "smooth", block: "nearest" });
 }
 
-// ================================================================== CHAT
-const SUGGEST = ["What files are in my workspace?", "Summarise README.md for me", "What's 17% of 2,340?", "Write a script that counts words in a file"];
-function chatAvatar(expr) {
-  return S.chatPersona ? el("div", { class: "av" }, personaFace(S.chatPersona, expr, "xs")) : el("div", { class: "av", text: "🤖" });
-}
-function chatMsg(who, text, err = false) {
-  const row = who === "user" ? el("div", { class: "msg user" }, el("div", { class: "av", text: "🙂" }), el("div", { class: "txt", text }))
-    : el("div", { class: "msg agent" }, chatAvatar("speaking"), el("div", { class: `txt${err ? " err" : ""}`, text }));
-  const pre = row.querySelector("pre"); if (pre) setExpr(pre, "speaking", Math.min(6000, 1200 + text.length * 15));
-  $("#chat-log").append(row); $("#chat-log").scrollTop = 1e9; renderSuggest(); return row;
-}
-function renderSuggest() {
-  const box = $("#chat-suggest"); box.replaceChildren();
-  if ($("#chat-log").querySelector(".msg.user")) return;
-  for (const s of SUGGEST) box.append(el("button", { class: "chip", type: "button", text: s, onclick: () => { $("#chat-input").value = s; $("#chat-input").focus(); } }));
-}
-function startTurn() {   // a "thinking" bubble + a folded list of the tools the agent uses this turn
-  const row = el("div", { class: "msg agent" }, chatAvatar("thinking"), el("div", { class: "txt muted", text: "thinking…" }));
-  const list = el("ol"), sum = el("summary", { text: "🔧 used 0 tools" });
-  const det = el("details", { class: "tools-used hidden" }, sum, list);
-  $("#chat-log").append(row, det); $("#chat-log").scrollTop = 1e9;
-  S.turn = { row, det, list, sum, n: 0 };
-}
-function turnTool(kind, d) {
-  const t = S.turn; if (!t) return;
-  if (kind === "tool_call") {
-    t.n++; t.det.classList.remove("hidden"); t.sum.textContent = `🔧 used ${t.n} tool${t.n > 1 ? "s" : ""}`;
-    t.list.append(el("li", { text: `${d.name}(${short(JSON.stringify(d.arguments), 140)})` }));
-    t.row.querySelector(".txt").textContent = `using ${d.name}…`;
-  } else if (kind === "tool_result" && t.list.lastChild) {
-    t.list.lastChild.append(el("div", { class: "muted", text: `→ ${short((d.preview || "").split("\n")[0], 160)}` }));
-    if (d.is_error) t.list.lastChild.classList.add("err");
-  }
-}
-function endTurn(text, err = false) {
-  const t = S.turn; S.turn = null;
-  if (t) t.row.remove();
-  const row = chatMsg("agent", text, err);
-  if (t && t.n) row.after(t.det);
-}
-$("#chat-form").addEventListener("submit", async (ev) => {
-  ev.preventDefault();
-  const text = $("#chat-input").value.trim(); if (!text) return;
-  chatMsg("user", text); $("#chat-input").value = "";
-  startTurn();   // before the request: a quick reply can arrive before the POST returns
-  try {
-    await api("POST", "/api/chat", { message: text, persona: S.chatPersona, profile: $("#chat-profile").value });
-  } catch (e) { endTurn(e.message, true); }
-});
-$("#chat-input").addEventListener("keydown", (ev) => {
-  if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); $("#chat-form").requestSubmit(); }
-});
-$("#chat-persona").addEventListener("change", () => { S.chatPersona = $("#chat-persona").value; chatHeader(); greet(); });
-$("#chat-reset").addEventListener("click", async () => {
-  await api("POST", "/api/chat/reset", {}).catch((e) => toast(e.message)); $("#chat-log").replaceChildren(); greet();
-});
-function chatHeader() {
-  const old = $("#chat-face"), pre = S.chatPersona ? personaFace(S.chatPersona, "neutral", "sm") : el("pre", { class: "ascii sm", text: "\n  [ agent ]\n" });
-  pre.id = "chat-face"; old.replaceWith(pre);
-}
-function greet() {
-  const p = S.personas[S.chatPersona];
-  if (p && p.greeting) chatMsg("agent", p.greeting); else renderSuggest();
-}
-
-// ================================================================== PERSONAS
-const PARTS = ["hair", "shape", "eyes", "nose", "mouth"], FLAGS = ["glasses", "beard", "earrings", "freckles"];
-function renderPersonaList() {
-  const box = $("#p-list"); box.replaceChildren();
-  for (const p of Object.values(S.personas)) {
-    const c = el("div", { class: `pcard${S.editing === p.id ? " sel" : ""}`, tabindex: "0", role: "button", style: `--face:${p.face.color}` },
-      personaFace(p.id, "neutral", "sm"), el("div", { class: "nm", text: p.name }),
-      el("div", { class: "rl", text: `${p.title}${p.builtin ? " · built-in" : ""}` }));
-    c.addEventListener("click", () => editPersona(p.id));
-    c.addEventListener("keydown", (ev) => { if (ev.key === "Enter") editPersona(p.id); });
+// ================================================================== AGENTS
+const PARTS = ["top", "eyes", "mouth"];
+function renderAgentList() {
+  const box = $("#a-list"); box.replaceChildren();
+  for (const a of Object.values(S.agents)) {
+    const c = el("div", { class: `acard${S.editing === a.id ? " sel" : ""}`, tabindex: "0", role: "button", style: `--face:${a.face.color}` },
+      agentFace(a.id, "neutral", "sm"), el("div", { class: "nm", text: a.name }), el("div", { class: "rl", text: modelLabel(a.model) }));
+    c.addEventListener("click", () => editAgent(a.id));
+    c.addEventListener("keydown", (ev) => { if (ev.key === "Enter") editAgent(a.id); });
     box.append(c);
   }
 }
-function editPersona(id, copyFrom) {
-  const p = copyFrom || S.personas[id];
-  if (!p) return;
-  S.editing = copyFrom ? null : id;
-  $("#p-heading").textContent = copyFrom ? "New persona" : `Edit ${p.name}`;
-  const v = (sel, val) => { $(sel).value = val ?? ""; };
-  v("#p-id", copyFrom ? "" : p.id); v("#p-name", p.name); v("#p-role", p.role || "generalist"); v("#p-title", p.title);
-  v("#p-personality", p.personality); v("#p-style", p.speaking_style); v("#p-greeting", p.greeting);
-  v("#p-backend", p.backend || "default"); v("#p-weight", p.weight || 1); v("#p-tools", p.tools || "");
-  setFaceForm(p.face || {});
-  $("#p-del").disabled = !!copyFrom || !S.personas[id] || S.personas[id].builtin;
-  renderPersonaList();
+function modelLabel(m) {
+  if (m === "default") return S.control ? `app model (${S.control.model})` : "app model";
+  return m === "claude" ? "Claude" : m.replace(/^local:/, "");
+}
+function renderModelSelect(current) {
+  const opts = [["default", "Same as the app"], ...(S.control?.runtime.models || []).map((m) => [`local:${m.name}`, m.name]),
+    ["claude", "Claude (needs an API key)"]];
+  if (!opts.some(([v]) => v === current)) opts.push([current, current]);
+  $("#a-model").replaceChildren(...opts.map(([v, t]) => el("option", { value: v, text: t })));
+  $("#a-model").value = current;
+}
+function editAgent(id, draft) {
+  const a = draft || S.agents[id];
+  if (!a) return;
+  S.editing = draft ? null : id;
+  $("#a-heading").textContent = draft ? "New agent" : `Edit ${a.name}`;
+  $("#a-name").value = a.name || "";
+  renderModelSelect(a.model || "default");
+  setFaceForm(a.face || {});
+  const cur = S.agents[id];
+  $("#a-del").disabled = !!draft || !cur || cur.builtin;
+  $("#a-del").textContent = cur && cur.stock ? "Reset to original" : "Delete";
+  renderAgentList();
 }
 function setFaceForm(f) {
   for (const k of PARTS) if (f[k] != null) $(`#f-${k}`).value = f[k];
-  for (const k of FLAGS) $(`#f-${k}`).checked = !!f[k];
-  S.draftFace.color = f.color || S.meta.face_parts.colors[0];
+  S.draft.color = f.color || S.meta.face_parts.colors[0];
   renderSwatches(); updatePreview();
 }
 function formFace() {
-  const f = { color: S.draftFace.color };
+  const f = { color: S.draft.color };
   for (const k of PARTS) f[k] = $(`#f-${k}`).value;
-  for (const k of FLAGS) f[k] = $(`#f-${k}`).checked;
   return f;
 }
 function renderSwatches() {
-  const box = $("#f-colors"); box.replaceChildren();
-  for (const c of S.meta.face_parts.colors) {
-    box.append(el("button", { class: "swatch", type: "button", role: "radio", "aria-checked": String(c === S.draftFace.color),
-      "aria-label": c, style: `background:${c}`, onclick: () => { S.draftFace.color = c; renderSwatches(); updatePreview(); } }));
-  }
+  $("#f-colors").replaceChildren(...S.meta.face_parts.colors.map((c) => el("button", { class: "swatch", type: "button", role: "radio",
+    "aria-checked": String(c === S.draft.color), "aria-label": c, style: `background:${c}`,
+    onclick: () => { S.draft.color = c; renderSwatches(); updatePreview(); } })));
 }
 let previewTimer;
 function updatePreview() {
@@ -371,134 +349,48 @@ function updatePreview() {
   previewTimer = setTimeout(async () => {
     try {
       const f = formFace(), { faces } = await api("POST", "/api/face", { face: f });
-      const pre = face(faces, S.editorExpr, "lg", f.color); pre.id = "p-preview";
-      $("#p-preview").replaceWith(pre);
-      $$("#p-expr .chip").forEach((b) => b.setAttribute("aria-pressed", String(b.textContent === S.editorExpr)));
+      swapFace("#a-preview", face(faces, S.editorExpr, "lg", f.color));
+      $$("#a-expr .chip").forEach((b) => b.setAttribute("aria-pressed", String(b.textContent === S.editorExpr)));
     } catch (e) { toast(e.message); }
-  }, 100);
+  }, 80);
 }
-$$("#p-form .builder select, #p-form .builder input").forEach((i) => i.addEventListener("input", updatePreview));
-$("#p-random").addEventListener("click", async () => {
+PARTS.forEach((k) => $(`#f-${k}`).addEventListener("input", updatePreview));
+$("#a-shuffle").addEventListener("click", async () => {
   try { setFaceForm((await api("GET", `/api/face/random?seed=${Math.random().toString(36).slice(2)}`)).face); } catch (e) { toast(e.message); }
 });
-$("#p-new").addEventListener("click", () => editPersona(null, { name: "", role: "generalist", face: {}, weight: 1 }));
-$("#p-dup").addEventListener("click", () => {
-  const cur = S.personas[S.editing]; if (!cur) return toast("Select a persona to duplicate.");
-  editPersona(null, { ...cur, name: `${cur.name} 2` });
+$("#a-new").addEventListener("click", async () => {
+  let f = {};
+  try { f = (await api("GET", `/api/face/random?seed=${Math.random().toString(36).slice(2)}`)).face; } catch { /* default face */ }
+  editAgent(null, { name: "", model: "default", face: f }); $("#a-name").focus();
 });
-$("#p-name").addEventListener("input", () => {   // suggest an id from the name for new personas
-  if (!S.editing) $("#p-id").value = $("#p-name").value.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
-});
-$("#p-del").addEventListener("click", async () => {
-  if (!S.editing || !confirm(`Delete your persona file for “${S.editing}”?`)) return;
-  try { await api("DELETE", `/api/personas/${encodeURIComponent(S.editing)}`); toast("Deleted."); S.editing = null; await loadPersonas(); }
+$("#a-del").addEventListener("click", async () => {
+  const a = S.agents[S.editing]; if (!a) return;
+  if (!confirm(a.stock ? `Put ${a.name} back the way it came?` : `Delete ${a.name}?`)) return;
+  try { await api("DELETE", `/api/agents/${encodeURIComponent(a.id)}`); toast(a.stock ? "Reset." : "Deleted."); await loadAgents(); }
   catch (e) { toast(e.message); }
 });
-$("#p-form").addEventListener("submit", async (ev) => {
+$("#a-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
-  const body = { id: $("#p-id").value.trim().toLowerCase(), name: $("#p-name").value.trim(), role: $("#p-role").value,
-    title: $("#p-title").value.trim(), personality: $("#p-personality").value.trim(), speaking_style: $("#p-style").value.trim(),
-    greeting: $("#p-greeting").value.trim(), backend: $("#p-backend").value.trim() || "default",
-    tools: $("#p-tools").value || null, weight: +$("#p-weight").value || 1, face: formFace() };
-  try { await api("POST", "/api/personas", body); toast(`Saved ${body.name}.`); S.editing = body.id; await loadPersonas(); }
+  const body = { id: S.editing || "", name: $("#a-name").value.trim(), model: $("#a-model").value, face: formFace() };
+  try { const a = await api("POST", "/api/agents", body); toast(`Saved ${a.name}.`); S.editing = a.id; await loadAgents(); }
   catch (e) { toast(e.message, 5000); }
 });
-
-// ================================================================== TOOLS
-let toolCat = "";
-function renderTools() {
-  const q = $("#t-search").value.toLowerCase(), risk = $("#t-risk").value, prof = $("#t-profile").value;
-  const grid = $("#t-grid"); grid.replaceChildren(); let n = 0;
-  for (const t of S.tools) {
-    if ((toolCat && t.category !== toolCat) || (risk && t.risk !== risk)) continue;
-    if (prof && !(S.meta.profile_tools[prof] || []).includes(t.name)) continue;
-    if (q && !(t.name + t.description + t.category).toLowerCase().includes(q)) continue;
-    n++;
-    const args = Object.entries(t.parameters.properties || {}).map(([k, v]) =>
-      `${k}${(t.parameters.required || []).includes(k) ? "" : "?"}: ${v.type || "any"}`).join(", ");
-    grid.append(el("div", { class: "tcard" }, el("h3", { text: t.name }),
-      el("span", { class: `tag ${t.risk}`, text: t.risk }), " ", el("span", { class: "tag", text: t.category }), " ",
-      t.approval ? el("span", { class: "tag", text: "asks first" }) : null,
-      el("p", { text: t.description }), el("div", { class: "args", text: args ? `(${args})` : "(no arguments)" })));
-  }
-  $("#t-count").textContent = `${n} of ${S.tools.length} tools`;
-}
-function renderToolFilters() {
-  const cats = [...new Set(S.tools.map((t) => t.category))].sort();
-  $("#t-cats").replaceChildren(...["", ...cats].map((c) => el("button", { class: "chip", type: "button", "aria-pressed": String(c === toolCat),
-    text: c || "all", onclick: () => { toolCat = c; renderToolFilters(); renderTools(); } })));
-}
-["#t-search", "#t-risk", "#t-profile"].forEach((s) => $(s).addEventListener("input", renderTools));
-
-// ================================================================== SAFETY
-async function loadSafety() {
-  let s;
-  try { s = await api("GET", "/api/safety"); } catch (e) { return toast(e.message); }
-  const [mstate, mdetail] = s.manifest;
-  const strict = s.sandbox.startsWith("strict");
-  const cards = [
-    ["Command sandbox", s.sandbox, strict ? "ok" : s.sandbox === "off" ? "bad" : "warn",
-      strict ? "System read-only, home folder hidden, only the workspace is writable." : "Kernel limits only. Install bubblewrap for full isolation."],
-    ["Approvals", s.auto_approve ? "auto-approve ON" : "you decide", s.auto_approve ? "bad" : "ok",
-      s.auto_approve ? "Risky tools run without asking (-y)." : "Commands, deletes and downloads wait for your click."],
-    ["Safe mode", s.safe_mode ? "on (read-only)" : "off", s.safe_mode ? "ok" : "",
-      s.safe_mode ? "The agent can't write or run anything." : "Set AGENT_SAFE_MODE=1 for a look-but-don't-touch agent."],
-    ["Free disk", `${s.disk_free_gb} GB`, s.disk_free_gb * 1000 < s.min_free_mb * 2 ? "warn" : "ok", `Writes stop below ${s.min_free_mb} MB.`],
-    ["Protected paths", `${s.protected} locked`, "ok", "OS, firmware, devices, your keys & configs, the agent itself."],
-    ["Package integrity", mstate, mstate === "changed" ? "bad" : mstate === "ok" ? "ok" : "", mdetail],
-    ["Undo history", `${s.backups.length} backup${s.backups.length === 1 ? "" : "s"}`, "ok", "Kept in the workspace's .agent folder."],
-    ["Workspace", s.workspace, "", s.audit_log ? `Audit log: ${s.audit_log}` : "Audit log off (no log folder)."],
-  ];
-  $("#s-cards").replaceChildren(...cards.map(([k, v, cls, d]) => el("div", { class: `card ${cls}` },
-    el("div", { class: "k", text: k }), el("div", { class: "v", text: v }), el("div", { class: "d", text: d }))));
-  const level = s.sandbox === "off" || s.auto_approve || mstate === "changed" ? "bad" : strict ? "ok" : "warn";
-  $("#shield").className = `shield ${level}`; S.safetyLevel = level; updateHealth();
-  $("#shield").title = { ok: "Fully protected", warn: "Protected (no strict sandbox)", bad: "Reduced protection - see Safety" }[level];
-  const box = $("#s-backups");
-  if (!s.backups.length) return box.replaceChildren(el("p", { class: "hint", text: "Nothing yet. When the agent changes or deletes a file, a copy lands here." }));
-  box.replaceChildren(el("table", {}, el("tr", {}, ...["When", "What happened", "File", "Size", ""].map((h) => el("th", { text: h }))),
-    ...s.backups.map((b) => el("tr", {}, el("td", { text: b.time }), el("td", { text: b.action }), el("td", { text: b.path, style: "font-family:var(--mono)" }),
-      el("td", { text: b.bytes > 1e6 ? `${(b.bytes / 1e6).toFixed(1)} MB` : `${Math.ceil(b.bytes / 1e3)} KB` }),
-      el("td", {}, el("button", { class: "btn small", type: "button", text: "Restore", onclick: () => restoreBackup(b) }))))));
-}
-async function restoreBackup(b) {
-  if (!confirm(`Put back ${b.path} as it was at ${b.time}?\n(Whatever is there now is backed up first.)`)) return;
-  try { const r = await api("POST", "/api/restore", { id: b.id }); toast(`Restored ${r.restored}.`); loadSafety(); }
-  catch (e) { toast(e.message, 5000); }
-}
-$("#s-refresh").addEventListener("click", loadSafety);
-$("#s-run").addEventListener("click", async () => {
-  try { await api("POST", "/api/diagnose", {}); $("#s-summary").textContent = "Running drills… (about a minute)"; }
-  catch (e) { toast(e.message); }
-});
-function table(head, rows) {
-  $("#s-table").replaceChildren(el("tr", {}, ...head.map((h) => el("th", { text: h }))), ...rows);
-}
-async function runDoctor() {
-  const rows = await api("GET", "/api/doctor");
-  const fails = rows.filter((r) => r.required && r.status === "FAIL");
-  return { rows, fails };
-}
-$("#s-doctor").addEventListener("click", async () => {
-  try {
-    const { rows, fails } = await runDoctor();
-    $("#s-summary").textContent = fails.length ? `Setup: ${fails.length} required item(s) missing` : "Setup: ready to run without an API key";
-    table(["", "Check", "Detail"], rows.map((r) => el("tr", {}, el("td", { class: r.status.toLowerCase(), text: r.status }),
-      el("td", { text: `${r.check}${r.required ? "" : " (optional)"}` }), el("td", { text: r.detail }))));
-  } catch (e) { toast(e.message); }
-});
-function renderDrills(rep) {
-  $("#s-summary").textContent = `${rep.passed}/${rep.total} drills passed` +
-    (rep.critical_failures.length ? ` — CRITICAL: ${rep.critical_failures.join(", ")}` : " — no critical failures");
-  const pf = (ok) => el("td", { class: ok ? "pass" : "fail", text: ok ? "PASS" : "FAIL" });
-  table(["", "Drill", "Severity", "Result"], [
-    ...rep.drills.map((d) => el("tr", { title: d.scenario }, pf(d.passed),
-      el("td", {}, el("div", { text: d.title }), el("div", { class: "hint", text: d.scenario })), el("td", { text: d.severity }), el("td", { text: d.detail }))),
-    ...rep.integrity.map((c) => el("tr", {}, pf(c.passed), el("td", { text: `integrity: ${c.name}` }), el("td", { text: "" }), el("td", { text: c.detail })))]);
+async function loadAgents() {
+  const list = await api("GET", "/api/agents");
+  S.agents = Object.fromEntries(list.map((a) => [a.id, a]));
+  S.picked = S.picked.filter((id) => S.agents[id]);
+  if (!S.picked.length) S.picked = list.slice(0, 3).map((a) => a.id);
+  renderPicker();
+  const opts = () => list.map((a) => el("option", { value: a.id, text: a.name }));
+  const cur = S.agents[S.chatAgent] ? S.chatAgent : list[0]?.id || "";
+  $("#chat-agent").replaceChildren(...opts()); $("#chat-agent").value = cur; S.chatAgent = cur;
+  swapFace("#chat-face", agentFace(cur, "neutral", "xs"));
+  $("#tk-agent").replaceChildren(...opts());
+  editAgent(S.editing && S.agents[S.editing] ? S.editing : list[0]?.id);
 }
 
 // ================================================================== TASKS
-const KIND_ICON = { agent: "🤖", council: "👥", diagnose: "🛡" };
+const KIND_ICON = { agent: "(o)", council: "ooo", diagnose: "[+]" };
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const fmtWhen = (iso) => {
   if (!iso) return "";
@@ -514,34 +406,34 @@ async function loadTasks() {
 function taskState(t) {
   const q = S.tasks.scheduler.queue || [];
   if (S.runningTask === t.id) return ["running", "running now"];
-  if (q.includes(t.id)) return ["queued", S.job ? `queued · waits for the current ${S.job.kind}` : "queued"];
-  return [t.last_status || "", t.last_status ? `last run ${fmtWhen(t.last_run)} · ${t.last_status}` : "never run"];
+  if (q.includes(t.id)) return ["queued", S.job ? `waiting for the current ${S.job.kind}` : "queued"];
+  return [t.last_status || "", t.last_status ? `last run ${fmtWhen(t.last_run)}: ${t.last_status}` : "never run"];
 }
 function renderTasks() {
   const box = $("#task-list"), { tasks, scheduler, runs } = S.tasks;
   $("#task-count").textContent = (scheduler.queue || []).length || "";
-  $("#q-state").textContent = scheduler.paused ? "⏸ paused" : `${(scheduler.queue || []).length} waiting`;
-  $("#q-pause").textContent = scheduler.paused ? "Resume queue" : "Pause queue";
+  $("#q-state").textContent = scheduler.paused ? "paused" : `${(scheduler.queue || []).length} waiting`;
+  $("#q-pause").textContent = scheduler.paused ? "Resume" : "Pause";
   if (!tasks.length) box.replaceChildren(el("div", { class: "empty" }, "No tasks yet.", el("br"),
-    "Create one: a morning briefing, a weekly research digest, nightly safety drills…"));
+    "Try a morning news brief, a weekly research digest or a nightly safety check."));
   else box.replaceChildren(...tasks.map((t) => {
     const [st, label] = taskState(t);
-    const run = el("button", { class: "btn small", type: "button", text: "▶ Run now", onclick: async (ev) => {
+    const run = el("button", { class: "btn small", type: "button", text: "Run now", onclick: async (ev) => {
       ev.stopPropagation();
-      try { const r = await api("POST", "/api/tasks/run", { id: t.id }); toast(r.queued ? `Queued “${t.name}”.` : "Already queued."); loadTasks(); }
+      try { const r = await api("POST", "/api/tasks/run", { id: t.id }); toast(r.queued ? `Queued "${t.name}".` : "Already queued."); loadTasks(); }
       catch (e) { toast(e.message); } } });
     const row = el("div", { class: `task${t.enabled ? "" : " off"}${S.taskEdit === t.id ? " sel" : ""}`, tabindex: "0", role: "button" },
-      el("div", { class: "ic", text: KIND_ICON[t.kind] || "•" }),
+      el("div", { class: "ic", text: KIND_ICON[t.kind] || "*" }),
       el("div", {}, el("div", { class: "nm", text: t.name }),
-        el("div", { class: "meta" }, el("b", { text: t.when }), t.next_run ? ` · next ${fmtWhen(t.next_run)}` : "",
-          t.permission === "safe" ? " · look-don't-touch" : " · asks first")),
+        el("div", { class: "meta" }, el("b", { text: t.when }), t.next_run ? `, next ${fmtWhen(t.next_run)}` : "",
+          t.permission === "safe" ? ", look-don't-touch" : ", asks first")),
       el("div", { class: "meta", style: "text-align:right" }, el("div", {}, el("span", { class: `st ${st}` }), label), run));
     row.addEventListener("click", () => editTask(t));
     row.addEventListener("keydown", (ev) => { if (ev.key === "Enter") editTask(t); });
     return row;
   }));
   const rl = $("#run-list");
-  if (!runs.length) rl.replaceChildren(el("p", { class: "hint", text: "No runs yet." }));
+  if (!runs.length) rl.replaceChildren(el("p", { class: "hint", text: "No results yet." }));
   else rl.replaceChildren(el("table", {}, el("tr", {}, ...["", "When", "Task", "Took", "Result", ""].map((h) => el("th", { text: h }))),
     ...runs.map((r) => el("tr", {}, el("td", {}, el("span", { class: `st ${r.status}`, title: r.status })),
       el("td", { text: fmtWhen(r.started) }), el("td", { text: r.name }), el("td", { text: `${Math.round(r.seconds)}s` }),
@@ -551,7 +443,7 @@ function renderTasks() {
 async function openResult(r) {
   try {
     const { text } = await api("GET", `/api/tasks/result/${encodeURIComponent(r.result)}`);
-    $("#v-title").textContent = `${r.name} · ${fmtWhen(r.started)}`; $("#v-text").textContent = text;
+    $("#v-title").textContent = `${r.name}, ${fmtWhen(r.started)}`; $("#v-text").textContent = text;
     $("#viewer").classList.remove("hidden"); $("#v-close").focus();
   } catch (e) { toast(e.message); }
 }
@@ -588,25 +480,24 @@ function formSchedule() {
   if (k === "weekly") s.days = $$("#tk-days .chip").filter((c) => c.getAttribute("aria-pressed") === "true").map((c) => +c.dataset.day);
   return s;
 }
+const toggleChip = (ev) => { const c = ev.currentTarget; c.setAttribute("aria-pressed", String(c.getAttribute("aria-pressed") !== "true")); };
 $("#tk-days").append(...DAYS.map((d, i) => el("button", { class: "chip", type: "button", "data-day": i, "aria-pressed": String(i < 5), text: d,
-  onclick: (ev) => { const c = ev.currentTarget; c.setAttribute("aria-pressed", String(c.getAttribute("aria-pressed") !== "true")); renderSchedFields(); } })));
+  onclick: (ev) => { toggleChip(ev); renderSchedFields(); } })));
 ["#tk-sched", "#tk-at", "#tk-minutes", "#tk-time"].forEach((x) => $(x).addEventListener("input", renderSchedFields));
-function renderTaskMembers(selected) {
-  $("#tk-members").replaceChildren(...Object.values(S.personas).map((p) => el("button", { class: "chip", type: "button", "data-id": p.id,
-    "aria-pressed": String(selected.includes(p.id)), text: p.name,
-    onclick: (ev) => { const c = ev.currentTarget; c.setAttribute("aria-pressed", String(c.getAttribute("aria-pressed") !== "true")); } })));
-}
 function editTask(t) {
-  t = t || { name: "", kind: "agent", prompt: "", persona: "", personas: Object.keys(S.personas).slice(0, 3), protocol: "roundtable",
-    profile: "", permission: "safe", schedule: { kind: "manual" }, enabled: true };
+  t = t || { name: "", kind: "agent", prompt: "", agent: "", agents: Object.keys(S.agents).slice(0, 3), protocol: "roundtable",
+    permission: "safe", schedule: { kind: "manual" }, enabled: true };
   S.taskEdit = t.id || null;
-  $("#task-heading").textContent = t.id ? `Edit “${t.name}”` : "New task";
+  $("#task-heading").textContent = t.id ? `Edit "${t.name}"` : "New task";
   $("#tk-name").value = t.name; $("#tk-prompt").value = t.prompt || ""; setKind(t.kind);
-  $("#tk-persona").value = t.persona || ""; $("#tk-profile").value = t.profile || ""; $("#tk-protocol").value = t.protocol || "roundtable";
-  renderTaskMembers(t.personas || []);
+  $("#tk-agent").value = S.agents[t.agent] ? t.agent : Object.keys(S.agents)[0] || "";
+  $("#tk-protocol").value = t.protocol || "roundtable";
+  $("#tk-members").replaceChildren(...Object.values(S.agents).map((a) => el("button", { class: "chip", type: "button", "data-id": a.id,
+    "aria-pressed": String((t.agents || []).includes(a.id)), text: a.name, onclick: toggleChip })));
   const s = t.schedule || { kind: "manual" };
   $("#tk-sched").value = s.kind; if (s.at) $("#tk-at").value = s.at.slice(0, 16);
-  if (s.minutes) $("#tk-minutes").value = s.minutes; if (s.time) $("#tk-time").value = s.time;
+  if (s.minutes) $("#tk-minutes").value = s.minutes;
+  if (s.time) $("#tk-time").value = s.time;
   if (s.days) $$("#tk-days .chip").forEach((c) => c.setAttribute("aria-pressed", String(s.days.includes(+c.dataset.day))));
   $$("input[name=tk-perm]").forEach((r) => { r.checked = r.value === t.permission; });
   $("#tk-enabled").checked = t.enabled !== false;
@@ -615,14 +506,14 @@ function editTask(t) {
 }
 async function saveTask(runAfter) {
   const body = { id: S.taskEdit || undefined, name: $("#tk-name").value.trim(), kind: S.taskKind, prompt: $("#tk-prompt").value.trim(),
-    persona: $("#tk-persona").value, profile: $("#tk-profile").value, protocol: $("#tk-protocol").value,
-    personas: $$("#tk-members .chip").filter((c) => c.getAttribute("aria-pressed") === "true").map((c) => c.dataset.id),
+    agent: $("#tk-agent").value, protocol: $("#tk-protocol").value,
+    agents: $$("#tk-members .chip").filter((c) => c.getAttribute("aria-pressed") === "true").map((c) => c.dataset.id),
     permission: $("input[name=tk-perm]:checked").value, schedule: formSchedule(), enabled: $("#tk-enabled").checked };
   try {
     const t = await api("POST", "/api/tasks", body);
     S.taskEdit = t.id;
     if (runAfter) await api("POST", "/api/tasks/run", { id: t.id });
-    toast(runAfter ? `Saved and queued “${t.name}”.` : `Saved “${t.name}”.`);
+    toast(runAfter ? `Saved and queued "${t.name}".` : `Saved "${t.name}".`);
     await loadTasks(); editTask(S.tasks.tasks.find((x) => x.id === t.id));
   } catch (e) { toast(e.message, 5000); }
 }
@@ -630,74 +521,118 @@ $("#task-form").addEventListener("submit", (ev) => { ev.preventDefault(); saveTa
 $("#tk-save-run").addEventListener("click", () => { if ($("#task-form").reportValidity()) saveTask(true); });
 $("#t-new").addEventListener("click", () => { editTask(null); $("#tk-name").focus(); });
 $("#tk-delete").addEventListener("click", async () => {
-  if (!S.taskEdit || !confirm("Delete this task? (Its past results stay in the history.)")) return;
+  if (!S.taskEdit || !confirm("Delete this task? (Its past results stay in the list.)")) return;
   try { await api("DELETE", `/api/tasks/${encodeURIComponent(S.taskEdit)}`); S.taskEdit = null; await loadTasks(); editTask(null); }
   catch (e) { toast(e.message); }
 });
 
-// ================================================================== CONTROL PANEL
-const gb = (b) => (b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.round(b / 1e6)} MB`);
+// ================================================================== SETTINGS: model engine + models
 async function loadControl() {
   try { S.control = await api("GET", "/api/control"); } catch (e) { return toast(e.message); }
-  renderControl(); updateHealth();
+  renderControl();
+}
+const activeTask = (rt) => (rt.task && rt.task.kind && !rt.task.finished ? rt.task : null);
+const hasModel = (rt, m) => rt.models.some((x) => x.name === m || x.name === `${m}:latest`);
+function progressText(t) {
+  return `${t.status}${t.total ? `: ${gb(t.done)} of ${gb(t.total)}` : ""}`;
 }
 function renderControl() {
-  const c = S.control, rt = c.runtime, t = rt.task && rt.task.kind && !rt.task.finished ? rt.task : null;
-  const state = !rt.installed ? ["Not installed", "concerned"] : rt.running ? ["Running", "happy"] : ["Stopped", "neutral"];
-  $("#eng-state").textContent = t ? (t.kind === "install" ? "Installing…" : `Downloading ${t.name}…`) : state[0];
-  const engFace = face(FACE_ENGINE, t ? "thinking" : state[1], "sm"); engFace.id = "eng-face"; $("#eng-face").replaceWith(engFace);
-  $("#eng-detail").textContent = t ? `${t.status}${t.total ? ` · ${gb(t.done)} of ${gb(t.total)}` : ""}`
-    : rt.running ? `Ollama ${rt.version || ""} at ${rt.url}${rt.bundled ? " · from your home folder" : rt.managed ? "" : " · installed on this computer"}${rt.loaded.length ? ` · loaded: ${rt.loaded.join(", ")}` : ""}`
-      : rt.installed ? "Press Start (or let it start with the app)." : `Downloads Ollama (${rt.archive || "for this computer"}) into your home folder. Windows: about 1.6 GB.`;
+  const c = S.control, rt = c.runtime, t = activeTask(rt);
+  const state = !rt.installed ? ["Not installed", "unsure"] : rt.running ? ["Running", "happy"] : ["Stopped", "neutral"];
+  $("#eng-state").textContent = t ? ({ install: "Installing...", pull: `Downloading ${t.name}...`, setup: "Setting up..." }[t.kind] || "Working...") : state[0];
+  const a = firstAgent();
+  if (a) swapFace("#eng-face", face(a.faces, t ? "thinking" : state[1], "xs", a.face.color));
+  $("#eng-detail").textContent = t ? progressText(t)
+    : rt.running ? `Ollama ${rt.version || ""}${rt.bundled ? ", from your Hybrid Agent folder" : rt.managed ? "" : ", installed on this computer"}${rt.loaded.length ? `. In memory: ${rt.loaded.join(", ")}` : ""}`
+      : rt.installed ? "Press Start (it also starts with the app)." : "Runs AI models on this computer. Downloads into your Hybrid Agent folder.";
   $("#eng-progress").classList.toggle("hidden", !t);
   if (t) $("#eng-progress div").style.width = `${t.total ? (100 * t.done) / t.total : 5}%`;
   $("#eng-install").classList.toggle("hidden", rt.installed || !!t);
-  $("#eng-start").classList.toggle("hidden", !rt.installed || rt.running);
+  $("#eng-start").classList.toggle("hidden", !rt.installed || rt.running || !!t);
   $("#eng-stop").classList.toggle("hidden", !rt.running);
-  $("#model-active").textContent = `in use: ${c.model}`;
-  const have = new Set(rt.models.map((m) => m.name));
+  $("#model-active").textContent = `agents use: ${c.model}`;
   $("#model-list").replaceChildren(...(rt.models.length ? rt.models.map((m) => {
     const active = m.name === c.model || m.name === `${c.model}:latest`;
     return el("div", { class: `model${active ? " active" : ""}` },
-      el("div", {}, el("div", { class: "nm", text: m.name }), el("div", { class: "meta", text: `${gb(m.size)} · ${active ? "in use" : "installed"}` })),
+      el("div", {}, el("div", { class: "nm", text: m.name }), el("div", { class: "meta", text: `${gb(m.size)}${active ? ", in use" : ""}` })),
       el("div", { class: "actions tight" },
-        active ? el("span", { class: "pill", text: "✓ in use" }) : el("button", { class: "btn small", type: "button", text: "Use", onclick: () => modelAction("use", m.name) }),
+        active ? el("span", { class: "pill", text: "in use" }) : el("button", { class: "btn small", type: "button", text: "Use", onclick: () => modelAction("use", m.name) }),
         el("button", { class: "btn small ghost", type: "button", text: "Delete", onclick: () => confirm(`Delete ${m.name} (${gb(m.size)})?`) && modelAction("delete", m.name) })));
-  }) : [el("p", { class: "hint", text: rt.running ? "No models yet - download one below." : "Start the engine to see your models." })]));
-  $("#model-suggest").replaceChildren(...rt.suggested.filter(([n]) => !have.has(n)).map(([n, size, ram, , note]) => el("div", { class: "model" },
-    el("div", {}, el("div", { class: "nm", text: n }), el("div", { class: "meta", text: `${size} download · needs ${ram} RAM · ${note}` })),
+  }) : [el("p", { class: "hint", text: rt.running ? "No models yet. Download one below." : "Start the engine to see your models." })]));
+  $("#model-suggest").replaceChildren(...rt.suggested.filter(([n]) => !hasModel(rt, n)).map(([n, size, ram, note]) => el("div", { class: "model" },
+    el("div", {}, el("div", { class: "nm", text: n + (n === rt.recommended ? "  (best fit for this computer)" : "") }),
+      el("div", { class: "meta", text: `${size} download, for ${ram}+ memory. ${note}` })),
     el("button", { class: "btn small", type: "button", text: "Download", disabled: !rt.running || !!t, onclick: () => modelAction("pull", n) }))));
   const st = c.settings;
   $("#set-contact").value = c.contact; $("#set-searx").value = c.searxng;
-  $("#set-sandbox").value = st.AGENT_SANDBOX || S.meta.sandbox || "auto"; $("#set-disk").value = st.AGENT_MIN_FREE_MB || 1024;
+  $("#set-sandbox").value = st.AGENT_SANDBOX || "auto"; $("#set-disk").value = st.AGENT_MIN_FREE_MB || 1024;
   $("#set-safe").checked = ["1", "true", "yes", "on"].includes(String(st.AGENT_SAFE_MODE || S.meta.safe_mode).toLowerCase());
   $("#set-autostart").checked = !["0", "false", "no", "off"].includes(String(st.AGENT_AUTO_START_MODEL || "1").toLowerCase());
-  const kv = [["Home folder", c.home || "(developer mode: settings come from .env)"], ["Model engine", gb(c.disk.engine_bytes)],
-    ["Models", gb(c.disk.models_bytes)], ["Free disk", `${c.free_gb} GB`]];
+  const kv = [["Folder", c.home || "(developer mode: settings come from .env)"], ["Memory", rt.ram_gb ? `${rt.ram_gb} GB` : "unknown"],
+    ["Model engine", gb(c.disk.engine_bytes)], ["Models", gb(c.disk.models_bytes)], ["Free disk", `${c.free_gb} GB`]];
   $("#storage").replaceChildren(...kv.flatMap(([k, v]) => [el("dt", { text: k }), el("dd", { text: v })]));
+  const key = rt.models.map((m) => m.name).join() + c.model;   // installed models changed: refresh the agent editor
+  if (key !== S.modelKey) { S.modelKey = key; renderModelSelect($("#a-model").value || "default"); renderAgentList(); }
+  updateHealth(); renderSetup();
 }
 async function modelAction(action, name) {
-  try { S.control = await api("POST", "/api/models", { action, name }); renderControl(); updateHealth();
-    if (action === "use") { toast(`Agents now use ${name}.`); S.meta = await api("GET", "/api/meta"); } }
-  catch (e) { toast(e.message, 5000); }
+  try {
+    S.control = await api("POST", "/api/models", { action, name }); renderControl();
+    if (action === "use") { toast(`Agents now use ${name}.`); S.meta = await api("GET", "/api/meta"); }
+  } catch (e) { toast(e.message, 5000); }
 }
 async function engine(action) {
   try { const r = await api("POST", "/api/runtime", { action }); toast(`Engine: ${r.result}`); loadControl(); }
   catch (e) { toast(e.message, 6000); }
 }
-$("#eng-install").addEventListener("click", () => confirm("Download the Ollama model engine from ollama.com into your home folder? (about 1.6 GB on Windows)") && engine("install"));
+$("#eng-install").addEventListener("click", () => engine("install"));
 $("#eng-start").addEventListener("click", () => engine("start"));
 $("#eng-stop").addEventListener("click", () => engine("stop"));
 $("#model-pull").addEventListener("click", () => { const n = $("#model-name").value.trim(); if (n) modelAction("pull", n); });
+
+// ---------------------------------------------------------------- one-click setup
+function needsSetup() {
+  const c = S.control;
+  if (!c || !S.meta || /scripted/.test(S.meta.backend) || c.backend_mode === "claude") return false;
+  return !c.runtime.running || !hasModel(c.runtime, c.model);
+}
+function setupModel() {
+  const rt = S.control.runtime;
+  return hasModel(rt, S.control.model) ? S.control.model : rt.recommended;
+}
+function renderSetup() {
+  const c = S.control, rt = c.runtime, t = activeTask(rt), show = needsSetup() || (t && t.kind === "setup");
+  $("#setup").classList.toggle("hidden", !show);
+  if (!show) return;
+  const model = t && t.kind === "setup" ? t.name : setupModel();
+  const info = rt.suggested.find(([n]) => n === model);
+  const a = firstAgent();
+  if (a) swapFace("#setup-face", face(a.faces, t ? "thinking" : "happy", "sm", a.face.color));
+  $("#setup-title").textContent = t ? "Setting up..." : "One-click setup";
+  $("#setup-text").textContent = t ? `Getting ${model} ready. You can keep using the app; this can take a while on slow connections.`
+    : hasModel(rt, model) ? `The model engine is stopped. Start it to use ${model}.`
+      : `Hybrid Agent runs an AI model on this computer. ${rt.ram_gb ? `This one has ${rt.ram_gb} GB of memory, so the best fit is` : "We suggest"} ${model}${info ? ` (${info[1]} download)` : ""}. Everything is saved in your Hybrid Agent folder.`;
+  $("#setup-go").textContent = hasModel(rt, model) ? "Start" : "Set up now";
+  $("#setup-go").disabled = !!t; $("#setup-other").classList.toggle("hidden", !!t);
+  $("#setup-progress").classList.toggle("hidden", !t);
+  if (t) $("#setup-progress div").style.width = `${t.total ? (100 * t.done) / t.total : 4}%`;
+  $("#setup-status").textContent = t ? progressText(t) : "";
+}
+$("#setup-go").addEventListener("click", async () => {
+  try { await api("POST", "/api/setup", { model: setupModel() }); loadControl(); } catch (e) { toast(e.message, 7000); }
+});
+$("#setup-other").addEventListener("click", () => showTab("settings"));
+
+// ---------------------------------------------------------------- online check + preferences + quit
 $("#online-run").addEventListener("click", async () => {
-  const box = $("#online-list"); box.replaceChildren(el("p", { class: "hint", text: "Checking… (a few seconds)" }));
+  const box = $("#online-list"); box.replaceChildren(el("p", { class: "hint", text: "Checking... (a few seconds)" }));
   $("#online-run").disabled = true;
   try {
     const rows = await api("GET", "/api/online");
-    box.replaceChildren(...rows.map((r) => el("div", { class: "check-row" }, el("span", { class: r.ok ? "ok" : "no", text: r.ok ? "✓" : "✕" }),
+    box.replaceChildren(...rows.map((r) => el("div", { class: "check-row" }, el("span", { class: r.ok ? "ok" : "no", text: r.ok ? "OK" : "FAIL" }),
       el("span", { text: r.check }), el("span", { class: "d", text: r.detail, title: r.detail }), el("span", { class: "hint", text: `${r.ms} ms` }))));
     const okN = rows.filter((r) => r.ok).length;
-    toast(okN === rows.length ? "Online: every check passed." : `${okN}/${rows.length} online checks passed - see the details.`);
+    toast(okN === rows.length ? "Online: every check passed." : `${okN} of ${rows.length} online checks passed.`);
   } catch (e) { box.replaceChildren(el("p", { class: "hint", text: e.message })); }
   $("#online-run").disabled = false;
 });
@@ -706,37 +641,94 @@ $("#settings-form").addEventListener("submit", async (ev) => {
   const changes = { AGENT_CONTACT: $("#set-contact").value.trim(), SEARXNG_URL: $("#set-searx").value.trim(),
     AGENT_SANDBOX: $("#set-sandbox").value, AGENT_MIN_FREE_MB: String(+$("#set-disk").value || 1024),
     AGENT_SAFE_MODE: $("#set-safe").checked ? "1" : "0", AGENT_AUTO_START_MODEL: $("#set-autostart").checked ? "1" : "0" };
-  try { S.control = await api("POST", "/api/settings", { changes }); renderControl(); toast("Settings saved."); loadSafety(); }
+  try { S.control = await api("POST", "/api/settings", { changes }); renderControl(); toast("Saved."); loadSafety(); }
   catch (e) { toast(e.message, 5000); }
 });
 $("#quit").addEventListener("click", async () => {
-  if (!confirm("Quit Hybrid Agent? This stops the GUI, the task scheduler and the model engine.")) return;
+  if (!confirm("Quit Hybrid Agent? This stops the app, the task scheduler and the model engine.")) return;
   try { await api("POST", "/api/quit", {}); } catch { /* the server is going away */ }
   document.body.replaceChildren(el("main", {}, el("div", { class: "empty", style: "margin-top:20vh" }, "Hybrid Agent has stopped.", el("br"),
-    "Start it again from HybridAgent.exe (or hybrid-agent studio).")));
+    "Start it again with HybridAgent.exe.")));
 });
-// One "is everything OK?" signal for the top bar (research: lead with the answer, details on demand).
+
+// ================================================================== SETTINGS: safety
+async function loadSafety() {
+  let s;
+  try { s = await api("GET", "/api/safety"); } catch (e) { return toast(e.message); }
+  const [mstate, mdetail] = s.manifest;
+  const strict = s.sandbox.startsWith("strict");
+  const cards = [
+    ["Approvals", s.auto_approve ? "auto-approve ON" : "you decide", s.auto_approve ? "bad" : "ok",
+      s.auto_approve ? "Risky tools run without asking." : "Commands, deletes and downloads wait for your OK."],
+    ["Command sandbox", s.sandbox, strict ? "ok" : s.sandbox === "off" ? "bad" : "warn", s.sandbox_detail],
+    ["Protected files", `${s.protected} locked`, "ok", "System files, your keys and the app itself are off limits."],
+    ["Undo history", `${s.backups.length} backup${s.backups.length === 1 ? "" : "s"}`, "ok", "Every change can be put back."],
+    ["Safe mode", s.safe_mode ? "on (look only)" : "off", s.safe_mode ? "ok" : "", s.safe_mode ? "Agents can't change anything." : "Turn on below for look-only agents."],
+    ["Free disk", `${s.disk_free_gb} GB`, s.disk_free_gb * 1000 < s.min_free_mb * 2 ? "warn" : "ok", `Writing stops below ${s.min_free_mb} MB.`],
+    ["App files", mstate, mstate === "changed" ? "bad" : mstate === "ok" ? "ok" : "", mdetail],
+  ];
+  $("#s-cards").replaceChildren(...cards.map(([k, v, cls, d]) => el("div", { class: `card ${cls}` },
+    el("div", { class: "k", text: k }), el("div", { class: "v", text: v }), el("div", { class: "d", text: d }))));
+  const level = s.sandbox === "off" || s.auto_approve || mstate === "changed" ? "bad" : strict ? "ok" : "warn";
+  $("#shield").className = `shield ${level}`; S.safetyLevel = level; updateHealth();
+  $("#shield").title = { ok: "Fully protected", warn: "Protected (limits only, no strict sandbox)", bad: "Reduced protection: see Settings" }[level];
+  const box = $("#s-backups");
+  if (!s.backups.length) return box.replaceChildren(el("p", { class: "hint", text: "Nothing yet." }));
+  box.replaceChildren(el("table", {}, el("tr", {}, ...["When", "What happened", "File", "Size", ""].map((h) => el("th", { text: h }))),
+    ...s.backups.map((b) => el("tr", {}, el("td", { text: b.time }), el("td", { text: b.action }), el("td", { text: b.path, style: "font-family:var(--mono)" }),
+      el("td", { text: b.bytes > 1e6 ? `${(b.bytes / 1e6).toFixed(1)} MB` : `${Math.ceil(b.bytes / 1e3)} KB` }),
+      el("td", {}, el("button", { class: "btn small", type: "button", text: "Restore", onclick: () => restoreBackup(b) }))))));
+}
+async function restoreBackup(b) {
+  if (!confirm(`Put back ${b.path} as it was at ${b.time}?\n(Whatever is there now is backed up first.)`)) return;
+  try { const r = await api("POST", "/api/restore", { id: b.id }); toast(`Restored ${r.restored}.`); loadSafety(); }
+  catch (e) { toast(e.message, 5000); }
+}
+$("#s-refresh").addEventListener("click", loadSafety);
+$("#s-run").addEventListener("click", async () => {
+  try { await api("POST", "/api/diagnose", {}); $("#s-summary").textContent = "Running drills... (about a minute)"; }
+  catch (e) { toast(e.message); }
+});
+function table(head, rows) { $("#s-table").replaceChildren(el("tr", {}, ...head.map((h) => el("th", { text: h }))), ...rows); }
+$("#s-doctor").addEventListener("click", async () => {
+  try {
+    const rows = await api("GET", "/api/doctor"), fails = rows.filter((r) => r.required && r.status === "FAIL");
+    $("#s-summary").textContent = fails.length ? `Setup: ${fails.length} required item(s) missing` : "Setup: ready";
+    table(["", "Check", "Detail"], rows.map((r) => el("tr", {}, el("td", { class: r.status.toLowerCase(), text: r.status }),
+      el("td", { text: `${r.check}${r.required ? "" : " (optional)"}` }), el("td", { text: r.detail }))));
+  } catch (e) { toast(e.message); }
+});
+function renderDrills(rep) {
+  $("#s-summary").textContent = `${rep.passed} of ${rep.total} drills passed` +
+    (rep.critical_failures.length ? `. CRITICAL: ${rep.critical_failures.join(", ")}` : ". No critical failures.");
+  const pf = (ok) => el("td", { class: ok ? "pass" : "fail", text: ok ? "PASS" : "FAIL" });
+  table(["", "Drill", "Result"], [
+    ...rep.drills.map((d) => el("tr", { title: d.scenario }, pf(d.passed),
+      el("td", {}, el("div", { text: d.title }), el("div", { class: "hint", text: d.scenario })), el("td", { text: d.detail }))),
+    ...rep.integrity.map((c) => el("tr", {}, pf(c.passed), el("td", { text: `check: ${c.name}` }), el("td", { text: c.detail })))]);
+}
+
+// One "is everything OK?" signal for the top bar: lead with the answer, details on demand.
 function updateHealth() {
   const c = S.control, h = $("#health");
   let level = "ok", text = "Ready";
   if (S.meta && /scripted/.test(S.meta.backend)) { level = "warn"; text = "Demo mode (scripted replies)"; }
-  else if (c && c.backend_mode !== "claude") {
-    const rt = c.runtime, have = rt.models.some((m) => m.name === c.model || m.name === `${c.model}:latest`);
-    if (!rt.running) { level = "bad"; text = rt.installed ? "Model engine stopped" : "No model engine yet"; }
-    else if (!have) { level = "warn"; text = `Model ${c.model} not downloaded`; }
-    else text = `Ready · ${c.model}`;
+  else if (c && c.backend_mode === "claude") text = "Ready (Claude)";
+  else if (c) {
+    const rt = c.runtime, t = activeTask(rt);
+    if (t) { level = "warn"; text = t.kind === "setup" ? "Setting up..." : "Downloading..."; }
+    else if (!rt.running) { level = "bad"; text = rt.installed ? "Model engine stopped" : "Setup needed"; }
+    else if (!hasModel(rt, c.model)) { level = "bad"; text = "Setup needed"; }
+    else text = `Ready: ${c.model}`;
   }
-  if (level === "ok" && S.safetyLevel === "bad") { level = "warn"; text += " · check Safety"; }
+  if (level === "ok" && S.safetyLevel === "bad") { level = "warn"; text += " (check Safety)"; }
   h.className = `health ${level}`; $("#health-text").textContent = text;
-  $("#banner").classList.toggle("hidden", level !== "bad" || S.bannerDismissed);
-  $("#banner-text").textContent = text + ".";
 }
-$("#health").addEventListener("click", () => showTab("control"));
-$("#banner-go").addEventListener("click", () => { showTab("control"); $("#banner").classList.add("hidden"); });
+$("#health").addEventListener("click", () => showTab("settings"));
 
 // ================================================================== APPROVAL / QUESTION DIALOG
 const VERBS = { run_shell: ["run a command", "command"], run_python: ["run Python code", "code"], run_tests: ["run tests", "path"],
-  delete_path: ["delete (moved to the undo history)", "path"], move_path: ["move a file", "source"], download_file: ["download a file", "url"],
+  delete_path: ["delete (kept in the undo history)", "path"], move_path: ["move a file", "source"], download_file: ["download a file", "url"],
   git_commit: ["make a git commit", "message"], restore_backup: ["restore a backup", "backup_id"] };
 let modalTimer;
 function openModal(e) {
@@ -746,7 +738,7 @@ function openModal(e) {
   const [verb, key] = VERBS[e.tool] || [`use ${e.tool}`, Object.keys(e.args || {})[0]];
   $("#m-risk").className = `risk ${risk}`; $("#m-risk").textContent = isQ ? "question" : `${risk} action`;
   $("#m-title").textContent = isQ ? `${who} asks:` : `Allow ${who} to ${verb}?`;
-  $("#m-text").textContent = isQ ? e.question : "Check this before allowing. If you're not sure, Deny - the agent will work around it.";
+  $("#m-text").textContent = isQ ? e.question : "Check this first. Not sure? Deny - the agent will work around it.";
   $("#m-main").textContent = isQ ? "" : String(e.args?.[key] ?? "");
   $("#m-pre").textContent = isQ ? "" : JSON.stringify(e.args, null, 2);
   $("#m-details").classList.toggle("hidden", isQ);
@@ -786,7 +778,7 @@ function onEvent(e) {
       if (e.kind === "council") onCouncilDone(e.result);
       if (e.kind === "chat") endTurn(e.result.answer);
       if (e.kind === "diagnose") renderDrills(e.result);
-      if (e.kind === "task") { S.runningTask = ""; toast(`Task “${e.result.name}” finished.`); loadTasks(); }
+      if (e.kind === "task") { S.runningTask = ""; toast(`Task "${e.result.name}" finished.`); loadTasks(); }
       break;
     case "job_error":
       setBusy(null); toast(e.error, 6000);
@@ -802,64 +794,46 @@ function onEvent(e) {
       break;
     case "council_setup": buildStage(e.members, e.chair, e.question); break;
     case "council": onCouncilEvent(e); break;
-    case "tool_call": if (S.stage[e.agent]) S.stage[e.agent].state.textContent = `using ${e.name}…`; break;
+    case "tool_call": if (S.stage[e.agent]) S.stage[e.agent].state.textContent = `using ${e.name}...`; break;
     case "agent": if (e.kind === "tool_call" || e.kind === "tool_result") turnTool(e.kind, e.data); break;
     case "approval_request": case "question": openModal(e); break;
     case "request_expired": if (S.modalId === e.request_id) closeModal(); break;
-    case "restored": if ($("#tab-safety").classList.contains("active")) loadSafety(); break;
+    case "restored": if ($("#tab-settings").classList.contains("active")) loadSafety(); break;
     case "tasks_changed": loadTasks(); break;
     case "task_started": S.runningTask = e.task; renderTasks(); break;
     case "runtime_progress":
       if (S.control) { S.control.runtime.task = e; renderControl(); }
-      if (e.finished) { toast(e.error ? `${e.kind} failed: ${e.status}` : `${e.kind === "install" ? "Engine installed" : `${e.name} downloaded`}.`, 5000); loadControl(); }
+      if (e.finished) {
+        const done = { install: "Engine installed.", pull: `${e.name} downloaded.`, setup: `All set: agents now use ${e.name}.` }[e.kind];
+        toast(e.error ? `Something went wrong: ${e.status}` : done, 6000);
+        loadControl(); api("GET", "/api/meta").then((m) => { S.meta = m; }).catch(() => {});
+      }
       break;
   }
 }
 function connectEvents() {
   const es = new EventSource(`/api/events?token=${encodeURIComponent(TOKEN)}`);
   es.onmessage = (m) => { try { onEvent(JSON.parse(m.data)); } catch (err) { console.warn(err); } };
-  es.onerror = () => { $("#health").className = "health warn"; $("#health-text").textContent = "reconnecting…"; };
+  es.onerror = () => { $("#health").className = "health warn"; $("#health-text").textContent = "reconnecting..."; };
   es.onopen = () => { if (S.control) updateHealth(); };
 }
 
 // ================================================================== BOOT
-async function loadPersonas() {
-  const list = await api("GET", "/api/personas");
-  S.personas = Object.fromEntries(list.map((p) => [p.id, p]));
-  S.picked = S.picked.filter((id) => S.personas[id]);
-  if (!S.picked.length) S.picked = list.slice(0, 3).map((p) => p.id);
-  renderPicker(); renderPersonaList();
-  const cp = $("#chat-persona"), cur = cp.value;
-  cp.replaceChildren(el("option", { value: "", text: "Agent (no persona)" }),
-    ...list.map((p) => el("option", { value: p.id, text: `${p.name} — ${p.title}` })));
-  cp.value = S.personas[cur] ? cur : ""; S.chatPersona = cp.value; chatHeader();
-  $("#tk-persona").replaceChildren(el("option", { value: "", text: "no persona" }), ...list.map((p) => el("option", { value: p.id, text: p.name })));
-  editPersona(S.editing && S.personas[S.editing] ? S.editing : list[0]?.id);
-}
-$("#banner-close").addEventListener("click", () => { S.bannerDismissed = true; $("#banner").classList.add("hidden"); });
-
 async function boot() {
-  if (!TOKEN) { document.body.textContent = "Open the link with ?token= printed in the terminal."; return; }
-  $("#guide-link").href = `/guide?token=${encodeURIComponent(TOKEN)}`;
+  if (!TOKEN) { document.body.textContent = "Open the link with ?token= printed in the Hybrid Agent window."; return; }
   try { S.meta = await api("GET", "/api/meta"); } catch (e) { $("#health-text").textContent = e.message; return; }
-  $("#health").title = `Model: ${S.meta.backend} · workspace: ${S.meta.workspace} · click for the Control panel`;
+  $("#health").title = `Model: ${S.meta.backend}. Workspace: ${S.meta.workspace}. Click for Settings.`;
   const opts = (xs) => xs.map((x) => el("option", { value: x, text: x }));
-  $("#p-role").replaceChildren(...Object.entries(S.meta.roles).map(([k, r]) => el("option", { value: k, text: r.title })));
-  $("#chat-profile").replaceChildren(el("option", { value: "", text: "automatic" }), ...opts(S.meta.profiles));
-  $("#p-tools").replaceChildren(el("option", { value: "", text: "role default" }), ...opts(S.meta.profiles));
-  $("#tk-profile").replaceChildren(el("option", { value: "", text: "automatic" }), ...opts(S.meta.profiles));
   $("#tk-protocol").replaceChildren(...Object.keys(S.meta.protocols).map((k) => el("option", { value: k, text: PROTOCOLS[k]?.[0] || k })));
-  $("#t-profile").append(...opts(S.meta.profiles));
   for (const k of PARTS) $(`#f-${k}`).replaceChildren(...opts(S.meta.face_parts[k]));
-  $("#p-expr").replaceChildren(...S.meta.expressions.map((ex) => el("button", { class: "chip", type: "button", text: ex,
+  $("#a-expr").replaceChildren(...S.meta.expressions.map((ex) => el("button", { class: "chip", type: "button", text: ex,
     onclick: () => { S.editorExpr = ex; updatePreview(); } })));
   renderProtocols();
-  S.tools = await api("GET", "/api/tools");
-  await loadPersonas();
-  renderToolFilters(); renderTools();
+  await loadAgents();
+  renderSuggest();
   if (S.meta.busy) setBusy(S.meta.busy);
-  if (S.meta.auto_approve) toast("Auto-approve is ON (-y): risky tools will run without asking.", 6000);
-  try { const t = sessionStorage.getItem("tab"); if (t) showTab(t); } catch { /* ignore */ }
+  if (S.meta.auto_approve) toast("Auto-approve is ON: risky tools will run without asking.", 6000);
+  try { const t = sessionStorage.getItem("tab"); if (t && $(`#tab-${t}`)) showTab(t); } catch { /* ignore */ }
   connectEvents();
   loadSafety(); loadControl(); loadTasks().then(() => editTask(null));
 }
